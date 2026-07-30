@@ -1,0 +1,31 @@
+# ----- Python -----
+__pycache__/
+*.pyc
+*.pyo
+
+# ----- 本地工具缓存 / 日志 -----
+.reasonix/
+reasonix.toml
+*.log
+lo_install.log
+
+# ----- 本次整治的临时反推脚本（非项目资产）-----
+_rebuild_reports.py
+
+# ----- 本地助手记忆（项目级，不入库）-----
+.workbuddy/
+
+# ----- 生成的报告产物（docx/pdf/png/html，可由引擎再生，不入库） -----
+reports/
+
+# ----- Next.js frontend（依赖与构建产物，不入库） -----
+frontend/node_modules/
+frontend/.npm-cache/
+frontend/.next/
+frontend/out/
+frontend/coverage/
+frontend/.env*.local
+frontend/tsconfig.tsbuildinfo
+
+# ----- 清理暂存区（重复/废弃报告的临时回收区，可恢复，不入库） -----
+.trash_local/

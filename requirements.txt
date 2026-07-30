@@ -1,0 +1,19 @@
+# 三元结构理论分析系统 — Python 依赖
+# 建议 Python 3.10+
+# 安装：pip install -r requirements.txt
+#
+# 注意：PDF 转换依赖外部程序（任一即可），不通过 pip 安装：
+#   - LibreOffice（推荐，跨平台，保留超链接）：soffice 命令
+#   - 或 Microsoft Word（仅 Windows，COM 兜底）
+#   - 或 pandoc + pdflatex/wkhtmltopdf
+
+python-docx>=1.2.0      # Word 文档渲染
+matplotlib>=3.10.1      # 利益关系网络图（PNG）
+networkx>=3.4.2         # 图布局算法
+lxml>=5.0.0             # python-docx 底层 XML 处理
+Pillow>=10.0.0         # 图片处理
+pywin32>=300 ; sys_platform == "win32"   # Windows 专属：pdf_converter.py 的 Word COM 兜底（win32com）
+
+# ── 不属于本引擎的依赖（backend 专属，见 backend/requirements.txt）──
+# pypdf / python-dotenv / python-multipart / websockets / fastapi / uvicorn / sqlalchemy / openai
+# 提示：backend 通过 sys.path 直接调用本引擎，部署 backend 时需同时具备以上两项依赖。

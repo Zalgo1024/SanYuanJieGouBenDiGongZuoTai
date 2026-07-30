@@ -1,0 +1,739 @@
+{
+  "theory": {
+    "name": "三元结构理论",
+    "version": "6.1",
+    "author": "三元结构理论",
+    "copyright": "三元结构理论 © 2026, CC BY-NC-SA 4.0，国作登字-2026-A-00048134",
+    "code_license": "GNU AGPL v3"
+  },
+  "dimensions": [
+    {
+      "id": "survival",
+      "name": "生存",
+      "question": "怎么活下去？",
+      "oneliner": "当下存续的稳定性保障"
+    },
+    {
+      "id": "reproduction",
+      "name": "繁衍",
+      "question": "怎么传下去？",
+      "oneliner": "未来存续的可能性拓展"
+    },
+    {
+      "id": "rebellion",
+      "name": "逆反",
+      "question": "路径僵化时怎么改？",
+      "oneliner": "对既有路径的反思、质疑与突破"
+    },
+    {
+      "id": "interest",
+      "name": "利益",
+      "question": "谁在争什么？",
+      "oneliner": "多维利益驱动行为与制度变迁"
+    }
+  ],
+  "concept_pool": [
+    {
+      "id": "survival_three_dimensions",
+      "name": "物质/社会/精神三维度",
+      "dimension": "生存",
+      "oneliner": "生存不止温饱，还有身份和意义",
+      "typical_use": "个体或群体在哪一层'活不下去'"
+    },
+    {
+      "id": "cost_benefit",
+      "name": "成本-收益核算",
+      "dimension": "生存",
+      "oneliner": "投入大于回报的持续失衡",
+      "typical_use": "谁在一直亏、亏什么、亏了多久"
+    },
+    {
+      "id": "compensation",
+      "name": "代偿",
+      "dimension": "生存",
+      "oneliner": "用A维度的过度付出来弥补B维度的亏空",
+      "typical_use": "明知不对却停不下来的行为"
+    },
+    {
+      "id": "alienation",
+      "name": "异化",
+      "dimension": "生存",
+      "oneliner": "代偿固化后自我与行为脱节",
+      "typical_use": "'我已经不是我了'的状态"
+    },
+    {
+      "id": "phase_transition",
+      "name": "相变",
+      "dimension": "生存",
+      "oneliner": "量变积累到临界点后质变",
+      "typical_use": "突然崩溃、突然爆发、突然翻转"
+    },
+    {
+      "id": "reproduction_temporality",
+      "name": "复制性/变异性/时间性",
+      "dimension": "繁衍",
+      "oneliner": "传递什么、怎么变、窗口多长",
+      "typical_use": "传承、扩散、传播、制度延续"
+    },
+    {
+      "id": "four_carriers",
+      "name": "四载体",
+      "dimension": "繁衍",
+      "oneliner": "生物/文化/制度/技术四种传递载体",
+      "typical_use": "哪种载体在起作用、哪种失效"
+    },
+    {
+      "id": "three_survival_boundaries",
+      "name": "三存续边界",
+      "dimension": "繁衍",
+      "oneliner": "传递能撑多久",
+      "typical_use": "传统为何断裂、制度为何僵化"
+    },
+    {
+      "id": "three_natures",
+      "name": "三性质（建设/消极/破坏）",
+      "dimension": "逆反",
+      "oneliner": "逆反的结果是修还是毁",
+      "typical_use": "抗议、躺平、暴力对抗的性质判断"
+    },
+    {
+      "id": "five_types",
+      "name": "五类型（主动/被动/自发/协从/主导）",
+      "dimension": "逆反",
+      "oneliner": "谁在反、怎么反",
+      "typical_use": "个体觉醒 vs 群体裹挟"
+    },
+    {
+      "id": "activation_threshold",
+      "name": "激活阈值",
+      "dimension": "逆反",
+      "oneliner": "压死骆驼的最后一根稻草",
+      "typical_use": "什么事触发了逆反、为什么是这件事"
+    },
+    {
+      "id": "rebellion_disability",
+      "name": "逆反失能",
+      "dimension": "逆反",
+      "oneliner": "该反没反、反了没用",
+      "typical_use": "沉默的大多数、制度化的无力"
+    },
+    {
+      "id": "gunpowder_effect",
+      "name": "火药桶效应",
+      "dimension": "逆反",
+      "oneliner": "积压→引爆→反噬",
+      "typical_use": "群体性事件、网络暴力、集体宣泄"
+    },
+    {
+      "id": "six_interest_types",
+      "name": "六大利益类型",
+      "dimension": "利益",
+      "oneliner": "物质/安全/政治/身份文化/制度性未来/公共利益",
+      "typical_use": "谁在争什么"
+    },
+    {
+      "id": "interest_conversion_paths",
+      "name": "利益转化路径",
+      "dimension": "利益",
+      "oneliner": "政治权力→经济收益→文化影响力……",
+      "typical_use": "A如何变成B"
+    },
+    {
+      "id": "interest_flow",
+      "name": "利益动线",
+      "dimension": "利益",
+      "oneliner": "经济/权力/文化/法律四路径追踪",
+      "typical_use": "资源从哪来、流向谁、谁卡住"
+    },
+    {
+      "id": "narrative_battlefield",
+      "name": "叙事战场",
+      "dimension": "利益",
+      "oneliner": "谁控制了'真相定义权'",
+      "typical_use": "信息操纵、舆论引导、选择性公开"
+    },
+    {
+      "id": "four_historical_dynamics",
+      "name": "四大历史动力机制",
+      "dimension": "利益",
+      "oneliner": "激励-约束/嵌入-制度化/合法化-叙事化/连锁-外溢",
+      "typical_use": "短期如何变长期、局部如何扩散"
+    },
+    {
+      "id": "triadic_mutual_construction",
+      "name": "三元互构关系",
+      "dimension": "利益",
+      "oneliner": "生存-繁衍-逆反三维度互为因果",
+      "typical_use": "维度间的联动放大效应"
+    },
+    {
+      "id": "three_point_framework",
+      "name": "三点式框架",
+      "dimension": "通用",
+      "oneliner": "A持存/B延伸/C偏离与重构",
+      "typical_use": "抽象分析、不想贴维度标签时"
+    }
+  ],
+  "max_concepts": 3,
+  "max_concepts_special": 4,
+  "interest_types": [
+    {
+      "id": "material",
+      "name": "物质利益",
+      "features": [
+        "稀缺性",
+        "可分割性",
+        "可控制性"
+      ],
+      "key_question": "谁控制「抓—运—分—护—续」链条的哪个节点？谁卡住了瓶颈？"
+    },
+    {
+      "id": "security",
+      "name": "安全利益",
+      "features": [
+        "防御性",
+        "优先性",
+        "生存底线"
+      ],
+      "key_question": "安全措施是真实防御还是利益转移的掩护？约束了谁、保护了谁？"
+    },
+    {
+      "id": "political",
+      "name": "政治利益",
+      "features": [
+        "枢纽性",
+        "可转化性",
+        "规则制定权"
+      ],
+      "key_question": "谁掌握水渠（资源分配渠道）？制度优势是否已路径依赖？"
+    },
+    {
+      "id": "identity_culture",
+      "name": "身份与文化利益",
+      "features": [
+        "动员力强",
+        "超越理性计算"
+      ],
+      "key_question": "身份认同如何被激活为集体行动？符号如何成为资本？"
+    },
+    {
+      "id": "institutional_future",
+      "name": "制度性与未来利益",
+      "features": [
+        "时间延迟",
+        "规则固化",
+        "代际影响"
+      ],
+      "key_question": "当前制度选择将在多远未来显现影响？后来者有无翻盘空间？"
+    },
+    {
+      "id": "public",
+      "name": "公共利益",
+      "features": [
+        "非排他性",
+        "共识依赖"
+      ],
+      "key_question": "谁在定义「公共利益」和「违反公共利益」？叙事边界如何被争夺？"
+    }
+  ],
+  "interest_conversion_paths": [
+    "政治权力→经济收益",
+    "经济收益→文化影响力",
+    "文化影响力→政治权力",
+    "经济收益→安全利益",
+    "制度优势→未来利益"
+  ],
+  "historical_dynamics": [
+    {
+      "id": "incentive_constraint",
+      "name": "激励—约束",
+      "description": "激励是水流（推动力），约束是河道（边界）。分析行动者如何在收益与风险之间权衡"
+    },
+    {
+      "id": "embedding_institutionalization",
+      "name": "嵌入—制度化",
+      "description": "短期博弈结果如何被制度固化为长期优势？路径依赖是否已形成？"
+    },
+    {
+      "id": "legitimation_narrativization",
+      "name": "合法化—叙事化",
+      "description": "叙事如何为权力游戏涂上「正义」的油彩？合法化如何跨时间、跨群体生效？"
+    },
+    {
+      "id": "chain_spillover",
+      "name": "连锁—外溢",
+      "description": "局部利益争夺如何通过经济网络/技术/文化渠道产生放大效应？"
+    }
+  ],
+  "visualization": {
+    "viz_types": [
+      "network",
+      "flow"
+    ],
+    "node_types": [
+      {
+        "id": "material",
+        "label": "物质利益",
+        "color": "#E74C3C"
+      },
+      {
+        "id": "security",
+        "label": "安全利益",
+        "color": "#F39C12"
+      },
+      {
+        "id": "political",
+        "label": "政治利益",
+        "color": "#2E86C1"
+      },
+      {
+        "id": "identity_culture",
+        "label": "身份文化利益",
+        "color": "#8E44AD"
+      },
+      {
+        "id": "institutional_future",
+        "label": "制度性未来利益",
+        "color": "#1ABC9C"
+      },
+      {
+        "id": "public",
+        "label": "公共利益",
+        "color": "#27AE60"
+      },
+      {
+        "id": "actor",
+        "label": "主体",
+        "color": "#34495E"
+      },
+      {
+        "id": "event",
+        "label": "事件",
+        "color": "#E67E22"
+      }
+    ],
+    "edge_types": [
+      {
+        "id": "economic",
+        "label": "经济路径",
+        "color": "#2ECC71",
+        "style": "solid"
+      },
+      {
+        "id": "power",
+        "label": "权力路径",
+        "color": "#E74C3C",
+        "style": "solid"
+      },
+      {
+        "id": "cultural",
+        "label": "文化路径",
+        "color": "#9B59B6",
+        "style": "dashed"
+      },
+      {
+        "id": "legal",
+        "label": "法律路径",
+        "color": "#3498DB",
+        "style": "dotted"
+      }
+    ],
+    "default_node_color": "#95A5A6",
+    "default_edge_color": "#BDC3C7"
+  },
+  "report_structure": {
+    "sections": [
+      {
+        "id": "fact_summary",
+        "name": "案例事实摘要",
+        "required": true,
+        "order": 2
+      },
+      {
+        "id": "framework",
+        "name": "分析框架说明",
+        "required": true,
+        "order": 3
+      },
+      {
+        "id": "analysis_body",
+        "name": "三元结构分析正文",
+        "required": true,
+        "order": 4
+      },
+      {
+        "id": "conclusion",
+        "name": "结论",
+        "required": true,
+        "order": 5
+      },
+      {
+        "id": "appendix",
+        "name": "附录",
+        "required": false,
+        "order": 6
+      }
+    ]
+  },
+  "policy_report_structure": {
+    "sections": [
+      {
+        "id": "fact_summary",
+        "name": "事实摘要",
+        "required": true,
+        "order": 2
+      },
+      {
+        "id": "framework",
+        "name": "分析框架",
+        "required": true,
+        "order": 3,
+        "sub_sections": [
+          {
+            "id": "core_tension",
+            "name": "核心张力",
+            "required": true
+          },
+          {
+            "id": "core_proposition",
+            "name": "核心命题",
+            "required": true
+          },
+          {
+            "id": "concept_table",
+            "name": "概念选择表",
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "policy_portrait",
+        "name": "政策对象图谱",
+        "required": true,
+        "order": 4,
+        "sub_sections": [
+          {
+            "id": "basic_info",
+            "name": "基本信息",
+            "required": true
+          },
+          {
+            "id": "publisher_profile",
+            "name": "发布主体与主题画像",
+            "required": true
+          },
+          {
+            "id": "affected_groups",
+            "name": "受影响群体（四分法）",
+            "required": true,
+            "sub_items": [
+              {
+                "id": "policy_issuer",
+                "name": "政策发布方"
+              },
+              {
+                "id": "beneficiary",
+                "name": "既得利益群体"
+              },
+              {
+                "id": "loser",
+                "name": "利益受损群体"
+              },
+              {
+                "id": "unaffected",
+                "name": "不相关群体"
+              }
+            ]
+          },
+          {
+            "id": "industry_matrix",
+            "name": "行业影响矩阵",
+            "required": true
+          },
+          {
+            "id": "timeline",
+            "name": "时间维度预判",
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "policy_weight",
+        "name": "政策权重与空间分析",
+        "required": true,
+        "order": 5,
+        "sub_sections": [
+          {
+            "id": "weight_level",
+            "name": "权重层级判定",
+            "required": true
+          },
+          {
+            "id": "operation_space",
+            "name": "操作空间评估",
+            "required": true
+          },
+          {
+            "id": "competition_map",
+            "name": "竞合政策关系图",
+            "required": false
+          }
+        ]
+      },
+      {
+        "id": "analysis_body",
+        "name": "三元结构分析正文",
+        "required": true,
+        "order": 6
+      },
+      {
+        "id": "conclusion",
+        "name": "结论与推导",
+        "required": true,
+        "order": 7,
+        "sub_sections": [
+          {
+            "id": "confluence",
+            "name": "汇流段",
+            "required": true
+          },
+          {
+            "id": "game_forecast",
+            "name": "博弈终局预判",
+            "required": true
+          },
+          {
+            "id": "golden_sentence",
+            "name": "可传播金句",
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "appendix",
+        "name": "附录/数据溯源",
+        "required": false,
+        "order": 8
+      }
+    ]
+  },
+  "typography": {
+    "font_family": {
+      "title": "Times New Roman",
+      "heading1": "Times New Roman",
+      "heading2": "Times New Roman",
+      "body": "Times New Roman",
+      "quote": "Times New Roman",
+      "code": "Consolas"
+    },
+    "font_size": {
+      "title": 26,
+      "subtitle": 10.5,
+      "heading1": 16,
+      "heading2": 13,
+      "body": 12,
+      "quote": 10.5,
+      "footnote": 10.5
+    },
+    "colors": {
+      "primary": "#1B3A5C",
+      "accent": "#7F8C8D",
+      "heading1": "#1B3A5C",
+      "heading2": "#4F81BD",
+      "body_text": "#333333",
+      "muted": "#7F8C8D",
+      "quote_bg": "F5F7FA",
+      "quote_gold_bg": "FFF8E1",
+      "conclusion_bg": "FFF5F5"
+    },
+    "page": {
+      "margin_top_mm": 37.0,
+      "margin_bottom_mm": 35.0,
+      "margin_left_mm": 28.0,
+      "margin_right_mm": 26.0
+    },
+    "first_line_indent_cm": 0.85,
+    "paragraph_spacing_pt": 6,
+    "cover_spacing_lines_before_title": 6,
+    "cover_spacing_lines_after_title": 3,
+    "quote_no_indent": true
+  },
+  "weight_systems": {
+    "china": {
+      "name": "中国政策体系",
+      "levels": [
+        {
+          "level": "L1",
+          "name": "宪法级",
+          "issuer": "全国人大",
+          "coverage": "覆盖一切"
+        },
+        {
+          "level": "L2",
+          "name": "法律级",
+          "issuer": "全国人大及其常委会",
+          "coverage": "覆盖行政法规"
+        },
+        {
+          "level": "L3",
+          "name": "行政法规级",
+          "issuer": "国务院",
+          "coverage": "覆盖规章"
+        },
+        {
+          "level": "L4",
+          "name": "部门规章级",
+          "issuer": "各部委"
+        },
+        {
+          "level": "L5",
+          "name": "地方性法规级",
+          "issuer": "省级/市级人大"
+        },
+        {
+          "level": "L6",
+          "name": "规范性文件级",
+          "issuer": "各级政府"
+        }
+      ]
+    },
+    "eu": {
+      "name": "欧盟政策体系",
+      "levels": [
+        {
+          "level": "L1",
+          "name": "条约级",
+          "issuer": "成员国共同签署"
+        },
+        {
+          "level": "L2",
+          "name": "法规级",
+          "issuer": "欧盟理事会+欧洲议会"
+        },
+        {
+          "level": "L3",
+          "name": "指令级",
+          "issuer": "欧盟理事会+欧洲议会"
+        },
+        {
+          "level": "L4",
+          "name": "决定级",
+          "issuer": "欧盟委员会/理事会"
+        },
+        {
+          "level": "L5",
+          "name": "建议与意见",
+          "issuer": "欧盟各机构"
+        }
+      ]
+    },
+    "us": {
+      "name": "美国政策体系",
+      "levels": [
+        {
+          "level": "L1",
+          "name": "宪法级",
+          "issuer": "制宪会议+修宪程序"
+        },
+        {
+          "level": "L2",
+          "name": "联邦法律级",
+          "issuer": "国会"
+        },
+        {
+          "level": "L3",
+          "name": "联邦行政法规级",
+          "issuer": "联邦行政部门"
+        },
+        {
+          "level": "L4",
+          "name": "行政令级",
+          "issuer": "总统"
+        },
+        {
+          "level": "L5",
+          "name": "州法律级",
+          "issuer": "各州议会"
+        }
+      ]
+    },
+    "international": {
+      "name": "国际组织体系",
+      "levels": [
+        {
+          "level": "L1",
+          "name": "宪章/公约级",
+          "issuer": "成员国全体签署"
+        },
+        {
+          "level": "L2",
+          "name": "条约/协定级",
+          "issuer": "成员国谈判签署"
+        },
+        {
+          "level": "L3",
+          "name": "裁决/决定级",
+          "issuer": "争端解决机构"
+        },
+        {
+          "level": "L4",
+          "name": "标准/指南级",
+          "issuer": "专业机构"
+        }
+      ]
+    },
+    "corporate": {
+      "name": "企业内规体系",
+      "levels": [
+        {
+          "level": "L1",
+          "name": "章程级",
+          "issuer": "股东会/董事会"
+        },
+        {
+          "level": "L2",
+          "name": "基本制度级",
+          "issuer": "董事会/CEO"
+        },
+        {
+          "level": "L3",
+          "name": "部门规章级",
+          "issuer": "各职能部门"
+        },
+        {
+          "level": "L4",
+          "name": "操作流程级",
+          "issuer": "基层管理者"
+        },
+        {
+          "level": "L5",
+          "name": "阶段性文件",
+          "issuer": "项目组"
+        }
+      ]
+    }
+  },
+  "endgame_types": [
+    {
+      "id": "direct_execution",
+      "name": "直接执行",
+      "condition": "刚性强+受损方无力反制"
+    },
+    {
+      "id": "modified_execution",
+      "name": "变通执行"
+    },
+    {
+      "id": "neutralized",
+      "name": "架空"
+    },
+    {
+      "id": "replaced",
+      "name": "替代"
+    },
+    {
+      "id": "reversed",
+      "name": "反向"
+    }
+  ]
+}
