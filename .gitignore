@@ -18,6 +18,11 @@ _rebuild_reports.py
 # ----- 生成的报告产物（docx/pdf/png/html，可由引擎再生，不入库） -----
 reports/
 
+# ----- backend 虚拟环境与运行时数据（源码入库，环境/产物不入库） -----
+backend/.venv/
+backend/venv/
+backend/runtime/
+
 # ----- Next.js frontend（依赖与构建产物，不入库） -----
 frontend/node_modules/
 frontend/.npm-cache/
