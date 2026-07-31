@@ -2,10 +2,15 @@
 
 ## 项目定位
 
-三元结构理论社会事件/政策/组织结构化分析工具。输入事件描述、政策文本或组织资料，输出结构化分析报告（Word + PDF），可选附带利益关系可视化图。
+三元结构理论社会事件/政策/组织/舆情结构化分析系统——**完整自包含项目**（内核渲染层 + Web 应用层同仓）：
+
+- **用户工作流**：丢关键词/链接 → AI 智能体读取本项目方法论 → **自动写完整报告 + 利益关系网络** → 内核排版 Word/PDF/交互式 HTML → 报告展览页（可下载/可编辑/版本留痕）。用户全程不手写成稿。
+- **两条使用路径**：
+  1. **Web（推荐）**：双击 `start.bat` → 浏览器 `http://127.0.0.1:3000/dashboard`，网页上丢关键词/链接自动生成报告。
+  2. **命令行内核**：`cases/run_*.py` 脚本 + `engine.export_from_text()` 直出报告（早期工作流，仍可用）。
 
 **核心方法论**：三元结构理论（生存—繁衍—逆反—利益四维框架）
-**覆盖三类分析**：政策分析（8段式）、事件/案例分析（5段式 / 深度8段式）、组织诊断（9段式，含架构拆解与资金来源、利益关系网络与利益集团拆解）
+**覆盖四类分析**：政策分析（8段式）、事件/案例分析（5段式 / 深度8段式）、组织诊断（9段式）、舆情分析（7段式）＋组合（源序）
 **著作权**：© 2026 李政恒，国作登字-2026-A-00048134
 **代码许可**：GNU AGPL v3
 
@@ -14,38 +19,63 @@
 ## 项目架构
 
 ```
-project_root/
+project_root/（本仓库 = 内核 + Web 应用 完整项目）
 │
-├── run_案例名.py               ← 案例脚本（每个案例一个）
-├── engine.py                    ← 引擎（编排流程）
-├── config.py                    ← 配置加载器
-├── parser.py                    ← 文本解析器（Markdown → 结构化数据）
+├── start.bat                    ← 一键启动（后端 8000 + 前端 3000，绑 127.0.0.1）
+│
+├── backend/                     ← Web 应用后端（FastAPI，5244 行级）
+│   ├── app/
+│   │   ├── main.py              ← FastAPI 装配（CORS/启动/任务恢复）
+│   │   ├── settings.py          ← ENGINE_DIR 默认指向本项目根（内核同仓）
+│   │   ├── queue.py             ← 任务队列（数据库即队列 + 崩溃恢复 + WS 进度）
+│   │   ├── search.py            ← 联网检索（BING→BRAVE→DuckDuckGo 零 Key 降级）
+│   │   ├── materials.py         ← 素材组装 + 来源清单
+│   │   ├── generator.py         ← AI 生成编排（web_mode / revise 再改）
+│   │   ├── prompt_builder.py    ← 5 类型提示词 + 哨兵章节护栏（双轨一致性）
+│   │   ├── contract.py          ← 生成后契约校验（type_mismatch 重试）
+│   │   ├── engine_bridge.py     ← 内核黑盒门面（调 export_from_text）
+│   │   ├── models.py / db.py    ← SQLite（Task/Project/ReportVersion 版本留痕）
+│   │   └── routers/             ← analyze/tasks/search/cases/reports/…
+│   └── tests/                   ← 67 个后端测试
+│
+├── frontend/                    ← Web 应用前端（Next.js 14 + React 18，源码在本仓库）
+│   ├── app/                     ← 页面（dashboard/analysis/report/cases/…）
+│   ├── components/              ← AnalysisEngine/NetworkCanvas(三态图)/VersionTimeline/RulesPanel
+│   └── lib/                     ← api.ts / network.ts / rules.ts（13 条写作铁律）
+│
+├── engine.py                    ← 内核引擎（编排流程，唯一出口 export_from_text）
+├── parser.py                    ← Markdown → 结构化数据（章节自动路由）
 ├── docx_renderer.py             ← Word 渲染器
-├── pdf_converter.py             ← PDF 转换器
-├── viz_network.py               ← 利益关系网络图
-├── theory_config.json           ← 理论配置（不动）
+├── pdf_converter.py             ← PDF 转换（LibreOffice）
+├── viz_network.py               ← 利益关系网络图（network/org/flow 三态）
+├── config.py / theory_config.json（理论配置，不动）
 ├── analysis_prompt.md           ← 分析提示词模板
-├── AGENTS.md                    ← 本文件（工作手册）
-│
-├── reports/                     ← 报告输出目录
-│   └── 案例名_YYYYMMDD_HHMMSS/
-│       ├── 案例名.docx
-│       ├── 案例名.pdf
-│       └── 关系图标题_交互式.html
-│
-├── __init__.py
-│
-└── （方法论 Skill 文档不在本仓库内——
-      统一存放于兄弟目录 `../三元结构理论 本体/skill们/`，
-      详见下方「方法论 Skill 位置」说明）
+├── cases/                       ← 命令行案例脚本（run_*.py，12 篇真实案例）
+├── tests/                       ← 内核测试（章节编号等）
+├── reports/                     ← 内核命令行产物（不入库）
+├── _archived/                   ← 历史孤儿归档（旧 backend 适配器/旧 frontend 快照，不入库）
+└── AGENTS.md                    ← 本文件（工作手册）
 ```
 
-> **方法论 Skill 统一位置说明**：7 个方法论文档（`完整版` / `案例分析本体` / `利益分析`（含内嵌多主体扩展）/ `政策分析与推导` / `组织诊断` / `舆情分析` / `立场显影剂`）已于 2026-07-27 **统一迁移至兄弟目录 `../三元结构理论 本体/skill们/`**（不在本 git 仓库内，仅本地）。本仓库根目录只保留引擎代码、`analysis_prompt.md`（引擎提示词模板，运行必需）、`AGENTS.md`、`UPGRADE_PLAN.md`。
-> - `立场显影剂`：2026-07-27 由 docx 蒸馏接入，是**个体立场穿透补丁**，与舆情 / 利益 / 组织互补（不接引擎，作模块加载）。
+> **方法论 Skill 统一位置说明**：7 个方法论文档（`完整版` / `案例分析本体` / `利益分析`（含内嵌多主体扩展）/ `政策分析与推导` / `组织诊断` / `舆情分析` / `立场显影剂`）统一存放于兄弟目录 `../三元结构理论 本体/skill们/`（不在本 git 仓库内，仅本地）。Web 后端 `prompt_builder.py` 按这些方法论拼装系统提示词。
+> - `立场显影剂`：个体立场穿透补丁，与舆情 / 利益 / 组织互补（不接引擎，作模块加载）。
 > - `舆情分析`：已接引擎为第 4 类报告类型（7 段式）。
-> - `多主体利益分析工作台` 已于 2026-07-27 **并入 `利益分析 Skill.md` 的「多主体利益分析扩展（高级）」章节**，原独立文档移至 `本体/skill们/_archive/` 留档。利益分析现为本技能唯一真源（基础版 + 内嵌多主体扩展）。
+> - `多主体利益分析工作台` 已并入 `利益分析 Skill.md` 的「多主体利益分析扩展（高级）」章节，利益分析现为本技能唯一真源。
 
 ---
+
+## 一键启动（Web）
+
+```
+双击 start.bat
+```
+- 后端 FastAPI :8000（绑 127.0.0.1，优先用 `backend/.venv`；缺失则回退系统 python）
+- 前端 Next.js :3000（`frontend` 需先 `npm install`；自动打开 `http://127.0.0.1:3000/dashboard`）
+- 数据全本机：SQLite `backend/data/app.db` + 产物 `backend/generated/`（不入库）
+- LLM/搜索密钥：仅存 `backend/.env` 或 `backend/data/llm_settings.json`，绝不提交
+- 手动启动（不双击）：
+  - 后端：`cd backend && .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000`
+  - 前端：`cd frontend && node_modules\.bin\next start -p 3000`（先 `next build`）
 
 ## 已有案例清单
 
