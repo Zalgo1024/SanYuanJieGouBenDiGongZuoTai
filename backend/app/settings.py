@@ -1,0 +1,104 @@
+"""后端运行配置 — 全部来自环境变量，密钥不落盘。
+
+密钥管理铁律：API Key 只允许通过 .env / 环境变量注入，禁止写入代码或仓库。
+内部使用：后端默认绑定 127.0.0.1（不对外监听），已通过 HOST/PORT 可配。
+"""
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()  # 读取 backend/.env（含 LLM 密钥，本地专用，不提交）
+
+# 域引擎默认路径：与本项目同仓（分析skill = 内核 + 应用 完整项目），
+# 默认指向项目根（backend/app/settings.py 向上两级）；可用 ENGINE_DIR 覆盖。
+DEFAULT_ENGINE_DIR = str(Path(__file__).resolve().parents[2])
+
+
+class Settings:
+    def __init__(self) -> None:
+        self.llm_provider: str = os.environ.get("LLM_PROVIDER", "mock").lower()
+
+        # OpenAI
+        self.openai_api_key: str = os.environ.get("OPENAI_API_KEY", "")
+        self.openai_base_url: str = os.environ.get("OPENAI_BASE_URL", "")
+        self.openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4o")
+
+        # DeepSeek（OpenAI 兼容协议）
+        self.deepseek_api_key: str = os.environ.get("DEEPSEEK_API_KEY", "")
+        self.deepseek_base_url: str = os.environ.get(
+            "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
+        )
+        self.deepseek_model: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
+        self.engine_dir: str = os.environ.get("ENGINE_DIR", DEFAULT_ENGINE_DIR)
+
+        # 报告输出目录：默认 backend/generated；若显式配置则优先，
+        # 且相对路径一律按 backend 根目录解析为绝对路径，避免产物散落在当前工作目录。
+        default_gen = str(Path(__file__).resolve().parent.parent / "generated")
+        gen_env = (os.environ.get("GENERATED_DIR") or "").strip()
+        if gen_env:
+            gen_path = Path(gen_env)
+            if not gen_path.is_absolute():
+                gen_path = Path(__file__).resolve().parent.parent / gen_path
+            self.generated_dir = str(gen_path)
+        else:
+            self.generated_dir = default_gen
+
+        # 内部使用：默认只监听本机回环地址，不对外暴露
+        self.host: str = os.environ.get("HOST", "127.0.0.1")
+        self.port: int = int(os.environ.get("PORT", "8000"))
+
+        # 默认项目归属人（本地单用户模式）。多用户时归属人应从会话/请求上下文获取；
+        # 此处作为可配置默认值，避免「李政恒」硬编码散落多处（见审查红线 P1·魔法值）。
+        # 可用 DEFAULT_OWNER_NAME / DEFAULT_OWNER_ID 覆盖。
+        self.default_owner_name: str = os.environ.get("DEFAULT_OWNER_NAME", "李政恒")
+        self.default_owner_id: str = os.environ.get("DEFAULT_OWNER_ID", "li")
+
+        # —— 全网搜索（T1：检索源自动选择 BING_KEY → BRAVE_KEY → DDG 零 Key）——
+        # 兼容旧字段（SEARCH_PROVIDER / SEARCH_API_KEY 仍在，供旧调用方使用）；
+        # 新检索策略统一走 search_strategy 自动选择，不再要求必须配置 Key。
+        self.search_provider: str = os.environ.get("SEARCH_PROVIDER", "serper").lower()
+        self.search_api_key: str = os.environ.get("SEARCH_API_KEY", "")
+        self.search_max_results: int = int(os.environ.get("SEARCH_MAX_RESULTS", "5"))
+        # 灰度总开关：on=强制开放 / off=全局关停（前端隐藏开关、后端一律跳过）/ auto=默认（有 key 才可用）
+        self.search_enabled: str = os.environ.get("SEARCH_ENABLED", "auto").lower()
+        # —— T1：BING / BRAVE 官方 API Key（可选，配了自动升级；不配则回退 DDG HTML 零 Key）——
+        self.bing_search_key: str = os.environ.get("BING_SEARCH_KEY", "").strip()
+        self.brave_search_key: str = os.environ.get("BRAVE_SEARCH_KEY", "").strip()
+        # 检索策略：auto(默认，BING→BRAVE→DDG 自动降级) | bing | brave | duckduckgo
+        self.search_strategy: str = os.environ.get("SEARCH_STRATEGY", "auto").lower()
+
+    @property
+    def search_configured(self) -> bool:
+        """是否具备可用的检索能力（T1 起：DDG HTML 零 Key 恒可执行）。
+
+        只要检索策略未被显式钉死到某个需要 Key 的源，就视为可用；
+        bing/brave 策略但缺对应 Key 时视为不可用（调用方应降级提示）。
+        """
+        if self.search_strategy == "bing":
+            return bool(self.bing_search_key)
+        if self.search_strategy == "brave":
+            return bool(self.brave_search_key)
+        return True  # auto / duckduckgo：零 Key 恒可用
+
+    @property
+    def search_available(self) -> bool:
+        """搜索特性是否对用户开放（灰度总开关）。
+
+        - off：全局关停，前端隐藏「联网搜索」开关、后端一律走 search_skipped；
+        - auto / on：开放（实际运行仍要求 search_configured 且有 key，否则降级跳过）。
+        用于「可灰度」逐步放量：先 off 观察稳定性，再 auto 对早期用户开放，最终常开。
+        """
+        return self.search_enabled != "off"
+
+    @property
+    def use_real_llm(self) -> bool:
+        if self.llm_provider == "deepseek":
+            return bool(self.deepseek_api_key)
+        if self.llm_provider == "openai":
+            return bool(self.openai_api_key)
+        return False
+
+
+settings = Settings()

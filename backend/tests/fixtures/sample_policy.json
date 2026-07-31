@@ -1,0 +1,43 @@
+{
+  "title": "夜间经济新规的利益格局分析",
+  "analysis_type": "policy",
+  "actors": [
+    {
+      "name": "监管部门",
+      "interest_types": ["political", "institutional_future"],
+      "stance": "制定方"
+    },
+    {
+      "name": "商圈企业",
+      "interest_types": ["material", "public"],
+      "stance": "执行方"
+    },
+    {
+      "name": "消费者公众",
+      "interest_types": ["identity_culture", "security"],
+      "stance": "受益/受影响方"
+    },
+    {
+      "name": "行业协会",
+      "interest_types": ["political", "material"],
+      "stance": "协调方"
+    }
+  ],
+  "event": "某地出台夜间经济新规，要求商圈延长营业时间并配套安保。",
+  "relations": [
+    { "source": "监管部门", "target": "商圈企业", "label": "许可", "type": "legal" },
+    { "source": "监管部门", "target": "消费者公众", "label": "保障", "type": "power" },
+    { "source": "商圈企业", "target": "消费者公众", "label": "服务", "type": "economic" }
+  ],
+  "evidence": [
+    { "content": "新规要求营业至24点并配备安保。", "source": "地方政府公报" }
+  ],
+  "confidence": "中",
+  "confidence_note": "基于公开文本",
+  "conflict_points": [
+    { "between": "商圈企业 vs 监管部门", "point": "延长营业带来的成本" }
+  ],
+  "recommendations": [
+    { "target": "监管部门", "action": "给予税费扶持", "rationale": "平衡企业成本" }
+  ]
+}

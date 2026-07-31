@@ -1,0 +1,17 @@
+# 密钥与本地配置（含 LLM key，禁止提交）
+.env
+
+# 生成的报告产物
+generated/
+
+# 本地数据库（账本，含用户/任务数据，禁止提交）
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

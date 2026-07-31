@@ -1,0 +1,41 @@
+{
+  "title": "老旧商圈改造利益冲突分析",
+  "analysis_type": "case",
+  "actors": [
+    {
+      "name": "商户",
+      "interest_types": ["material", "security"],
+      "stance": "被搬迁方",
+      "interest_strength": { "material": "强", "security": "中" }
+    },
+    {
+      "name": "居民",
+      "interest_types": ["security", "identity_culture"],
+      "stance": "安置对象",
+      "interest_strength": { "security": "强" }
+    },
+    {
+      "name": "开发商",
+      "interest_types": ["material", "political"],
+      "stance": "实施方",
+      "interest_strength": { "material": "强", "political": "中" }
+    }
+  ],
+  "event": "某城市拟对老旧商圈改造，涉及商户搬迁与居民安置，补偿标准引发争议。",
+  "relations": [
+    { "source": "开发商", "target": "商户", "label": "搬迁补偿", "type": "economic" },
+    { "source": "开发商", "target": "居民", "label": "安置协议", "type": "legal" },
+    { "source": "商户", "target": "居民", "label": "邻避冲突", "type": "cultural" }
+  ],
+  "evidence": [
+    { "content": "改造方案公示补偿单价为 X 元/平方米。", "source": "区政府公告（2026）" }
+  ],
+  "confidence": "中",
+  "confidence_note": "基于公开公示材料",
+  "conflict_points": [
+    { "between": "商户 vs 开发商", "point": "补偿单价争议" }
+  ],
+  "recommendations": [
+    { "target": "监管方", "action": "公开补偿测算依据", "rationale": "提升公信力" }
+  ]
+}

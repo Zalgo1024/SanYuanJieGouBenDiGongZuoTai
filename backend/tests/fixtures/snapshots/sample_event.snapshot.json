@@ -1,0 +1,16 @@
+{
+  "analysis_type": "case",
+  "diagram_node_count": 4,
+  "diagram_edge_count": 3,
+  "required_sections": [
+    "案例事实摘要",
+    "分析框架说明",
+    "三元结构分析正文",
+    "结论"
+  ],
+  "required_sections_present": true,
+  "concept_count": 3,
+  "has_copyright": true,
+  "has_diagram_block": true,
+  "markdown_length": 2101
+}

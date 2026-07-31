@@ -1,0 +1,129 @@
+"""search.py 单测（T1）：DDG HTML 解析 / 去重 / 降级标记 / 兼容上下文。
+
+不依赖外网：DDG 解析用内嵌 HTML 夹具；降级用「显式 provider 但缺 Key」触发；
+真网检索只做可选冒烟（跳过不失败）。
+"""
+from app.search import (
+    SearchHit,
+    SearchResult,
+    _normalize_url,
+    _parse_ddg_html,
+    dedupe_hits,
+    format_search_context,
+    search_web,
+)
+
+DDG_HTML = """<html><body>
+<div class="result results_links results_links_deep web-result">
+  <h2 class="result__title"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage%3Fa%3D1&amp;rut=abc">标题一</a></h2>
+  <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpage%3Fa%3D1&amp;rut=abc">摘要一内容</a>
+</div>
+<div class="result results_links results_links_deep web-result">
+  <h2 class="result__title"><a class="result__a" href="https://example.org/b">标题二</a></h2>
+  <a class="result__snippet">摘要二内容</a>
+</div>
+</body></html>"""
+
+
+def test_parse_ddg_html_extracts_hits():
+    """DDG HTML 解析：.result__a（标题 + uddg 还原 URL）+ .result__snippet（摘要）。"""
+    hits = _parse_ddg_html(DDG_HTML, 5)
+    assert len(hits) == 2
+    assert hits[0].title == "标题一"
+    # DDG 重定向链接中的 uddg 参数应被还原为真实 URL
+    assert hits[0].url == "https://example.com/page?a=1"
+    assert hits[0].snippet == "摘要一内容"
+    assert hits[1].title == "标题二"
+    assert hits[1].url == "https://example.org/b"
+    assert hits[1].snippet == "摘要二内容"
+
+
+def test_parse_ddg_html_respects_max_results():
+    hits = _parse_ddg_html(DDG_HTML, 1)
+    assert len(hits) == 1
+
+
+def test_dedupe_hits_by_url_normalization():
+    """URL 归一：去 query 参数 / www / 协议差异 → 判重。"""
+    hits = [
+        SearchHit(title="同一条新闻", url="https://example.com/a?utm_source=x", snippet=""),
+        SearchHit(title="同一条新闻（副本）", url="https://www.example.com/a", snippet=""),
+        SearchHit(title="完全不同的标题", url="https://example.com/b", snippet=""),
+    ]
+    out = dedupe_hits(hits)
+    assert len(out) == 2, [h.url for h in out]
+    urls = [h.url for h in out]
+    assert "https://example.com/b" in urls
+
+
+def test_dedupe_hits_by_title_similarity():
+    """标题相似度（difflib ratio > 0.9）判重。"""
+    hits = [
+        SearchHit(title="某公司组织架构与资金来源分析", url="https://a.com/1", snippet=""),
+        SearchHit(title="某公司组织架构与资金来源分析报告", url="https://a.com/2", snippet=""),
+        SearchHit(title="完全无关的另一篇", url="https://a.com/3", snippet=""),
+    ]
+    out = dedupe_hits(hits)
+    assert len(out) == 2
+
+
+def test_normalize_url():
+    assert _normalize_url("https://www.Example.com/a?x=1") == "https://example.com/a"
+    assert _normalize_url("HTTP://example.com/a/") == "http://example.com/a"
+
+
+def test_search_web_bing_missing_key_degrades(monkeypatch):
+    """显式 provider=bing 但缺 Key → 返回带 degraded 标记的 SearchResult，不静默、不抛异常。"""
+    from app.settings import settings
+
+    monkeypatch.setattr(settings, "bing_search_key", "")
+    r = search_web("三元结构理论", provider="bing")
+    assert r is not None
+    assert r.provider == "bing"
+    assert r.hits == []
+    assert r.degraded and "BING" in r.degraded
+
+
+def test_search_web_brave_missing_key_degrades(monkeypatch):
+    from app.settings import settings
+
+    monkeypatch.setattr(settings, "brave_search_key", "")
+    r = search_web("测试", provider="brave")
+    assert r is not None
+    assert r.provider == "brave"
+    assert r.hits == []
+    assert r.degraded and "BRAVE" in r.degraded
+
+
+def test_search_web_empty_query_degrades():
+    r = search_web("   ")
+    assert r is not None
+    assert r.degraded
+
+
+def test_search_web_old_signature_compat(monkeypatch):
+    """旧签名 search_web(query, provider, api_key, max_results) 兼容包装。"""
+    from app.settings import settings
+
+    monkeypatch.setattr(settings, "bing_search_key", "")
+    # 旧调用姿势：provider 在第二位置（字符串）→ 应被识别为显式 provider=bing
+    r = search_web("测试", "bing", "", 5)
+    assert r is not None
+    assert r.provider == "bing"
+    assert r.degraded
+
+
+def test_format_search_context_hits_and_degraded():
+    r = SearchResult(
+        query="q",
+        hits=[SearchHit(title="标题", url="https://e.com/a", snippet="摘要")],
+        provider="duckduckgo",
+    )
+    ctx = format_search_context(r)
+    assert "标题" in ctx and "https://e.com/a" in ctx and "摘要" in ctx
+
+    d = SearchResult(query="q", hits=[], provider="duckduckgo", degraded="检索源不可用")
+    ctx2 = format_search_context(d)
+    assert "检索源不可用" in ctx2  # 降级必须显式可见
+
+    assert format_search_context(None) == ""

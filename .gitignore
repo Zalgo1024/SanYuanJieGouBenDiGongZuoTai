@@ -34,3 +34,14 @@ frontend/tsconfig.tsbuildinfo
 
 # ----- 清理暂存区（重复/废弃报告的临时回收区，可恢复，不入库） -----
 .trash_local/
+
+# ----- 历史孤儿归档（旧 backend 适配器 / 旧 frontend 快照，仅本地留档，不入库） -----
+_archived/
+
+# ----- backend 运行时与密钥（源码入库，环境/产物/密钥不入库） -----
+backend/.venv/
+backend/.venv-broken/
+backend/venv/
+backend/runtime/
+backend/generated/
+backend/data/

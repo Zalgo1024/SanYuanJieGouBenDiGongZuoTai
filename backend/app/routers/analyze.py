@@ -1,0 +1,264 @@
+"""分析任务接口：提交分析 / 取结果 / 轮询 / 重试 / 实时进度（WebSocket）/ 下载产物。"""
+import logging
+import os
+import uuid
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
+
+from app.db import SessionLocal
+from app import queue as taskq
+from app.models import ReportVersion, Task, _now
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+class AnalyzeRequest(BaseModel):
+    title: str
+    input_text: str = ""
+    analysis_type: str = "case"  # case | policy | org | opinion | combo
+    project_id: str | None = None  # 预留（阶段三接入），可选
+    mode: str = "rule"  # rule(默认,离线内置引擎) | llm(可选 AI 插件,增强)
+    structured: dict | None = None  # rule 模式：结构化输入
+    # llm 模式：每请求仅携带模型/温度/提示词版本 —— 不含 api_key（密钥只在后端，
+    # 来自 data/llm_settings.json 或 .env，详见 /api/settings/llm）。
+    llm_config: dict | None = None
+    material_ids: list[str] | None = None  # 阶段三：本次分析使用的材料（证据出处）
+    search: bool | None = None  # 阶段五：搜索开关 None=自动 | True=强制搜索 | False=跳过（保留兼容）
+    web: bool = False  # T8：联网写报告（检索/抓取素材注入）
+    source_urls: list[str] | None = None  # T8：用户勾选来源白名单（null=自动检索全部）
+
+
+@router.post("/api/analyze")
+async def analyze(req: AnalyzeRequest):
+    task_id = uuid.uuid4().hex
+    mode = req.mode if req.mode in ("rule", "llm") else "rule"
+    with SessionLocal() as db:
+        db.add(
+            Task(
+                id=task_id,
+                title=req.title,
+                input_text=req.input_text,
+                analysis_type=req.analysis_type,
+                project_id=req.project_id,
+                mode=mode,
+                structured=req.structured,
+                llm_config=req.llm_config,
+                material_ids=req.material_ids or None,
+                search_enabled=req.search,
+                web=req.web,
+                source_urls=req.source_urls or None,
+                status="queued",
+            )
+        )
+        db.commit()
+    # 工人池会认领并执行；客户端通过 WS 收进度
+    return {"task_id": task_id}
+
+
+@router.get("/api/analyze/{task_id}")
+def get_result(task_id: str):
+    with SessionLocal() as db:
+        t = db.get(Task, task_id)
+        if not t:
+            return {"status": "not_found"}
+        data = (
+            t.result
+            if t.status == "done"
+            else (t.error if t.status == "error" else None)
+        )
+        # 历史报告在「来源标识」功能加入前未存 engine_used，用 Task.mode 兜底，
+        # 保证旧的 rule/llm 报告也能在展示页正确显示「模型生成 / AI 生成」。
+        data_dict = data if isinstance(data, dict) else None
+        if data_dict is not None and not data_dict.get("engine_used"):
+            data_dict = {**data_dict, "engine_used": t.mode or "rule"}
+        return {
+            "status": t.status,
+            "data": data,
+            "material_ids": t.material_ids or [],
+            "engine_used": data_dict.get("engine_used") if data_dict else (t.mode or None),
+            "degraded_from_llm": bool(data_dict.get("degraded_from_llm")) if data_dict else False,
+            "degrade_reason": data_dict.get("degrade_reason") if data_dict else None,
+            "prompt_version": t.prompt_version,
+            "llm_model": t.llm_model,
+            "phase": t.phase,
+            "progress_pct": t.progress_pct or 0,
+            "search_results": t.search_results,
+        }
+
+
+@router.post("/api/analyze/{task_id}/retry")
+def retry_task(task_id: str):
+    """为失败/成功的任务创建一条新的重试任务（保留原任务历史，不覆盖）。
+
+    - 仅当原任务存在时允许；
+    - 新任务继承原 project_id / 输入 / 模式 / structured / llm_config；
+    - attempt_no = 原 attempt_no + 1，retry_of 指向原任务；
+    - 立即入队（status='queued'），由工人池认领。
+    返回新任务 id。
+    """
+    with SessionLocal() as db:
+        t = db.get(Task, task_id)
+        if not t:
+            return {"status": "not_found"}
+        new_id = uuid.uuid4().hex
+        new_task = Task(
+            id=new_id,
+            title=t.title,
+            input_text=t.input_text,
+            analysis_type=t.analysis_type,
+            project_id=t.project_id,
+            mode=t.mode or "rule",
+            structured=t.structured,
+            llm_config=t.llm_config,
+            owner_id=t.owner_id,
+            status="queued",
+            attempt_no=(t.attempt_no or 1) + 1,
+            retry_of=t.id,
+            material_ids=t.material_ids,  # 继承原任务使用的材料
+            search_enabled=t.search_enabled,  # 继承搜索开关
+            web=t.web,  # 继承联网开关
+            source_urls=t.source_urls,  # 继承来源白名单
+        )
+        db.add(new_task)
+        db.commit()
+        return {"new_task_id": new_id, "retry_of": t.id, "attempt_no": new_task.attempt_no}
+
+
+@router.get("/api/analyze/{task_id}/poll")
+def poll_task(task_id: str):
+    """轮询快照（WS 断开后的进度恢复用）。返回带服务端时间戳的权威状态。"""
+    with SessionLocal() as db:
+        t = db.get(Task, task_id)
+        if not t:
+            return {"status": "not_found"}
+        data = (
+            t.result
+            if t.status == "done"
+            else (
+                {
+                    "message": t.error,
+                    "type": t.error_type,
+                    "phase": t.error_phase,
+                }
+                if t.status == "error"
+                else None
+            )
+        )
+        # 历史报告未存 engine_used 时回退 Task.mode（与 get_result 保持一致）
+        data_dict = data if isinstance(data, dict) else None
+        if data_dict is not None and not data_dict.get("engine_used"):
+            data_dict = {**data_dict, "engine_used": t.mode or "rule"}
+        return {
+            "status": t.status,
+            "data": data,
+            "task_id": task_id,
+            "material_ids": t.material_ids or [],
+            "engine_used": data_dict.get("engine_used") if data_dict else (t.mode or None),
+            "degraded_from_llm": bool(data_dict.get("degraded_from_llm")) if data_dict else False,
+            "degrade_reason": data_dict.get("degrade_reason") if data_dict else None,
+            "prompt_version": t.prompt_version,
+            "llm_model": t.llm_model,
+            "phase": t.phase,
+            "progress_pct": t.progress_pct or 0,
+            "search_results": t.search_results,
+            "server_time": _now().isoformat(),
+        }
+
+
+@router.websocket("/ws/progress/{task_id}")
+async def ws_progress(task_id: str, ws: WebSocket):
+    await ws.accept()
+    # 先订阅，再以数据库快照为权威当前状态发送（避免漏掉订阅前已发出的进度）
+    q = taskq.subscribe(task_id)
+    with SessionLocal() as db:
+        t = db.get(Task, task_id)
+        if not t:
+            await ws.send_json({"status": "not_found"})
+            taskq.unsubscribe(task_id)
+            return
+        snap_status = t.status
+        snap_data = (
+            t.result
+            if t.status == "done"
+            else (t.error if t.status == "error" else None)
+        )
+        snap_phase = t.phase
+        snap_pct = t.progress_pct or 0
+    snap_msg = {"status": snap_status, "data": snap_data}
+    if snap_phase is not None:
+        snap_msg["phase"] = snap_phase
+        snap_msg["progress_pct"] = snap_pct
+    await ws.send_json(snap_msg)
+    if snap_status in ("done", "error"):
+        taskq.unsubscribe(task_id)
+        return
+    try:
+        while True:
+            msg = await q.get()
+            await ws.send_json(msg)
+            if msg["status"] in ("done", "error"):
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        taskq.unsubscribe(task_id)
+
+
+@router.get("/api/download/{task_id}")
+def download(task_id: str, kind: str = "word", version: str | None = None):
+    with SessionLocal() as db:
+        t = db.get(Task, task_id)
+        if not t:
+            return {"error": "not_found"}
+        # 指定版本：用该版本 Markdown 即时导出（人工修订版也能下载）
+        if version:
+            v = (
+                db.query(ReportVersion)
+                .filter(
+                    ReportVersion.id == version, ReportVersion.task_id == task_id
+                )
+                .first()
+            )
+            if not v:
+                return {"error": "version_not_found"}
+            from app.engine_bridge import export_report
+
+            exp = export_report(t.title or "未命名报告", v.content_markdown)
+            if kind == "pdf":
+                pdf_path = exp.get("pdf")
+                if pdf_path and os.path.exists(pdf_path):
+                    return FileResponse(pdf_path, filename=os.path.basename(pdf_path))
+                # 修订版 PDF 未生成（本机缺 LibreOffice 等转换引擎）：明确报错
+                return JSONResponse(
+                    {
+                        "error": "pdf_unavailable",
+                        "message": "本机未安装 LibreOffice 等转换引擎，PDF 暂不可用。可下载 Word 版本。",
+                    },
+                    status_code=409,
+                )
+            path = exp.get("word")
+            if path and os.path.exists(path):
+                return FileResponse(path, filename=os.path.basename(path))
+            return {"error": "file_missing"}
+        # 原行为：取生成结果里的文件
+        if not t.result:
+            return {"error": "not_found"}
+        if kind == "pdf":
+            pdf_path = t.result.get("pdf")
+            if pdf_path and os.path.exists(pdf_path):
+                return FileResponse(pdf_path, filename=os.path.basename(pdf_path))
+            return JSONResponse(
+                {
+                    "error": "pdf_unavailable",
+                    "message": "本机未安装 LibreOffice 等转换引擎，PDF 暂不可用。可下载 Word 版本。",
+                },
+                status_code=409,
+            )
+        path = t.result.get("word")
+    if path and os.path.exists(path):
+        return FileResponse(path, filename=os.path.basename(path))
+    return {"error": "file_missing"}

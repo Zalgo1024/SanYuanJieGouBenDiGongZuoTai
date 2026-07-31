@@ -1,0 +1,421 @@
+"""任务队列（排班）— Phase 2.2。
+
+设计：数据库即队列。任务行 status='queued' 即在排队；N 个工人协程持续认领（claim）
+最旧的 queued 任务，置为 generating 后在线程池里跑生成，完成后写回 done/error，
+并通过内存 progress_queues 推送给正在监听的 WebSocket。
+
+崩溃恢复：服务启动时把所有 stuck 在 generating 的任务重置回 queued，由工人重新接单。
+
+并发上限：WORKER_COUNT 控制同时跑几道菜（默认 3），避免本机 LLM/CPU 打满。
+"""
+import asyncio
+import re
+import threading
+import time
+
+from app.db import SessionLocal
+from app.generator import ReportGenerator
+from app.llm_client import create_llm
+from app.search import should_search
+from app.settings import settings
+
+WORKER_COUNT = 3
+
+# 实时进度订阅（仅存在于有客户端连 WS 期间，ephemeral，非持久）
+_subscribers: dict[str, asyncio.Queue] = {}
+_claim_lock = threading.Lock()
+_workers: list[asyncio.Task] = []
+
+
+def subscribe(task_id: str) -> asyncio.Queue:
+    q: asyncio.Queue = asyncio.Queue()
+    _subscribers[task_id] = q
+    return q
+
+
+def unsubscribe(task_id: str) -> None:
+    _subscribers.pop(task_id, None)
+
+
+def _emit(task_id: str, status: str, data=None, *, phase: str | None = None, progress_pct: int | None = None) -> None:
+    q = _subscribers.get(task_id)
+    if q is not None:
+        msg = {"status": status, "data": data}
+        if phase is not None:
+            msg["phase"] = phase
+        if progress_pct is not None:
+            msg["progress_pct"] = progress_pct
+        q.put_nowait(msg)
+
+
+def recover_interrupted() -> None:
+    """启动时把卡在 generating 的任务放回队列（程序崩溃/重启后的孤儿任务）。"""
+    from app.models import Task
+
+    with SessionLocal() as db:
+        stuck = db.query(Task).filter(Task.status == "generating").all()
+        for r in stuck:
+            r.status = "queued"
+        if stuck:
+            db.commit()
+
+
+# 错误堆栈脱敏：去掉本地绝对路径与可能的密钥片段，避免敏感信息落库/外泄
+_SENSITIVE = ("api_key", "secret", "token", "password", "sk-", "Bearer ")
+_PATH_RE = __import__("re").compile(r"[A-Za-z]:\\[^\"'\n]{0,200}|/(?:Users|home|root)/[^\"'\n]{0,200}")
+
+
+def _safe_error_text(e: Exception) -> str:
+    """人类可读错误摘要（不含完整堆栈，避免本地路径/密钥外泄）。"""
+    msg = str(e)
+    for s in _SENSITIVE:
+        if s.lower() in msg.lower():
+            msg = msg.replace(msg, "[已脱敏的错误信息]")
+            break
+    msg = _PATH_RE.sub("[path]", msg)
+    return (msg or e.__class__.__name__)[:1500]
+
+
+# 6 步分析链：phase 字符串 -> (第几步, 名称)，用于错误时告知前端"第 X ���失败"
+PHASE_STEP: dict[str, tuple[int, str]] = {
+    "inspect": (1, "检查分析目标"),
+    "search": (2, "全网搜索相关信息"),
+    "fetch": (2, "抓取网页正文"),
+    "search_skipped": (2, "全网搜索相关信息"),
+    "decompose": (3, "对目标进行拆解分析"),
+    "network": (4, "利益关系网络拆解"),
+    "organize": (5, "整理分析结果"),
+    "output": (6, "输出分析结果"),
+}
+
+# phase 顺序（用于"关键词定位不早于当前阶段"的校正，避免倒退误报）
+_PHASE_ORDER = ["inspect", "search", "fetch", "search_skipped", "decompose", "network", "organize", "output"]
+
+
+def _classify_error(e: Exception, current_phase: str | None = None) -> tuple[str, str]:
+    """把失败定位到 6 步分析链中的具体一步（替换旧的 validate/generate/export 三档）。
+
+    优先用「当前已达阶段」current_phase（最准确：就是崩溃时停在哪一步）；
+    仅当错误文本关键词能定位到「不早于当前阶段」的更具体步骤时才采用，
+    例如导出阶段报 docx 错误、整理阶段报 contract 错误，避免倒退误报。
+    """
+    msg = str(e).lower()
+    forced: str | None = None
+    if "diagram" in msg or "network" in msg:
+        forced = "network"
+    elif "docx" in msg or "pdf" in msg or "export" in msg:
+        forced = "output"
+    elif "schema" in msg or "validation" in msg or "contract" in msg:
+        forced = "organize"
+    cur = current_phase or "organize"
+    if forced and _PHASE_ORDER.index(forced) >= _PHASE_ORDER.index(cur):
+        return e.__class__.__name__, forced
+    return e.__class__.__name__, cur
+
+
+def _process(task_id: str) -> None:
+    """在线程池里执行单条任务的生成与导出，并把结果写回数据库。
+
+    6 步分析进度链：
+        1. inspect  (5%)  — 检查分析目标（解析输入）
+        2. search   (15%) — 全网搜索相关信息（可选增强：灰度开放且已配置 API 时执行，否则跳过）
+        3. decompose(25%) — 对目标进行拆解分析
+        4. network  (55%) — 利益关系网络拆解
+        5. organize (75%) — 整理分析结果
+        6. output   (85%) — 输出分析结果（导出）
+    完成时 progress_pct=100。
+    """
+    from app.models import Task
+
+    # 先取出任务字段（session 关闭后 detached 实例不可再懒加载）
+    with SessionLocal() as db:
+        t = db.get(Task, task_id)
+        if t is None or t.status != "generating":
+            return
+        title = t.title
+        input_text = t.input_text
+        analysis_type = t.analysis_type
+        mode = t.mode or "rule"
+        structured = t.structured
+        llm_config = t.llm_config
+        search_enabled = t.search_enabled  # None=自动 | True=强制 | False=跳过
+        web = bool(t.web)  # T8：联网写报告
+        source_urls = t.source_urls or []  # T8：用户勾选白名单
+
+    def _update_phase(phase: str, pct: int):
+        """更新 DB 中的阶段字段并推送给 WS 订阅者；同时记录"当前已达阶段"。"""
+        last_phase["v"] = phase
+        with SessionLocal() as db:
+            t = db.get(Task, task_id)
+            if t is not None:
+                t.phase = phase
+                t.progress_pct = pct
+                db.commit()
+        _emit(task_id, "generating", phase=phase, progress_pct=pct)
+
+    # 记录"当前已达阶段"，用于失败时精确告知用户卡在第几步
+    last_phase = {"v": "inspect"}
+
+    # —— 步骤 1：检查分析目标 ——
+    _update_phase("inspect", 5)
+
+    # —— 步骤 2：联网检索/抓取素材（T1/T8，替代旧 search 分支）——
+    # 判定：web 开关（或旧 search 兼容）开启 且 灰度未关停 且 输入值得搜。
+    web_on = (
+        (web or search_enabled is True)
+        and settings.search_enabled != "off"
+        and should_search(input_text)
+    )
+    bundle = None  # MaterialBundle | None（web_on 且成功时组装）
+    if web_on:
+        _update_phase("search", 15)
+        try:
+            from app import materials
+            from app.search import derive_query, fetch_and_clean, search_web
+
+            query = derive_query(input_text)
+            hits = []
+            degraded: str | None = None
+            provider: str | None = None
+            if source_urls:
+                # 用户勾选白名单 → 直接抓取（不检索）
+                _update_phase("fetch", 18)
+                fetched = fetch_and_clean(source_urls)
+                degraded = None
+            else:
+                # 无白名单 → 检索 + 去重 + 抓取
+                result = search_web(query, settings.search_max_results)
+                if result is None:
+                    degraded = "检索源不可用"
+                    fetched = []
+                else:
+                    provider = result.provider
+                    degraded = result.degraded
+                    hits = result.hits
+                    from app.search import dedupe_hits
+
+                    hits = dedupe_hits(hits)
+                    _update_phase("fetch", 18)
+                    fetched = fetch_and_clean([h.url for h in hits[: settings.search_max_results]])
+            bundle = materials.build_materials(hits, fetched, set())
+            mctx = materials.format_materials_context(bundle)
+            if mctx:
+                input_text = f"{input_text}\n\n{mctx}"
+            # 结果落库（含 degraded，不静默），随 done 载荷推给前端
+            # snippets 为旧前端兼容字段（旧 AnalysisEngine 读 search_results.snippets）
+            with SessionLocal() as db:
+                t2 = db.get(Task, task_id)
+                if t2 is not None:
+                    t2.search_results = {
+                        "query": query,
+                        "provider": provider or "duckduckgo",
+                        "hits": [
+                            {"title": h.title, "url": h.url, "snippet": h.snippet} for h in hits
+                        ],
+                        "snippets": [
+                            (h.snippet or h.title) if h.title else (h.snippet or "")
+                            for h in hits
+                        ],
+                        "degraded": degraded,
+                        "sources": [
+                            {"title": s.title, "url": s.url} for s in bundle.sources
+                        ],
+                    }
+                    db.commit()
+        except Exception as e:  # noqa: BLE001
+            # 检索/抓取失败：降级标记，不影响后续分析
+            logger.warning("联网检索/抓取失败（已降级标记）：%s", _safe_error_text(e))
+            with SessionLocal() as db:
+                t2 = db.get(Task, task_id)
+                if t2 is not None:
+                    t2.search_results = {
+                        "query": derive_query(input_text),
+                        "provider": "duckduckgo",
+                        "hits": [],
+                        "degraded": f"检索/抓取失败：{_safe_error_text(e)}",
+                        "sources": [],
+                    }
+                    db.commit()
+    else:
+        _update_phase("search_skipped", 15)
+
+    _emit(task_id, "generating")
+    try:
+        # web 素材包（bundle 为 MaterialBundle；web_on 但无素材时仍传 web_mode=True 加引用约束）
+        bundle_dict = bundle.__dict__ if bundle is not None else None
+        if mode == "rule":
+            # 内置规则引擎：纯本地、不需要任何 LLM / key
+            gen = ReportGenerator(
+                None, analysis_type=analysis_type, mode="rule", structured=structured,
+                web_mode=web_on, materials=bundle_dict,
+            )
+        else:
+            # 可选 LLM 插件：优先用每请求配置，回退 backend .env，再回退 Mock
+            from app.llm_client import create_llm_from_config
+
+            llm = create_llm_from_config(llm_config)
+            gen = ReportGenerator(
+                llm, analysis_type=analysis_type, mode="llm", llm_config=llm_config,
+                web_mode=web_on, materials=bundle_dict,
+            )
+
+        # on_phase 回调由 generator 在 generate/export 关键节点调用
+        def _on_phase(phase: str, pct: int):
+            _update_phase(phase, pct)
+
+        # 轻量重试（默认 2 次）：吸收文件监听器/预览短暂占用 docx 等瞬时故障
+        out = None
+        for attempt in range(1, 3):
+            try:
+                out = gen.generate_and_export(
+                    input_text, title, settings.generated_dir,
+                    slug=task_id, on_phase=_on_phase,
+                )
+                break
+            except Exception:  # noqa: BLE001
+                if attempt < 2:
+                    time.sleep(1.0)
+                    continue
+                raise
+        # 去掉绝对路径 folder 字段，避免外泄本地路径
+        safe = {k: v for k, v in out.items() if k != "folder"}
+        # raw_response 仅落库（诊断用），不推给前端/WS
+        raw_response = safe.pop("raw_response", None)
+        with SessionLocal() as db:
+            t = db.get(Task, task_id)
+            if t is None:
+                return
+            t.status = "done"
+            t.phase = "output"
+            t.progress_pct = 100
+            t.result = safe
+            t.error = None
+            # 把搜索结果一并带出，前端 WS done 载荷即可直接展示（无需再轮询）
+            safe["search_results"] = t.search_results
+            # 阶段四：持久化 LLM 增强元信息
+            t.llm_model = safe.get("llm_model")
+            t.llm_temperature = safe.get("llm_temperature")
+            t.prompt_version = safe.get("prompt_version")
+            t.llm_raw_response = raw_response
+            db.commit()
+            # 阶段六·需求1：自动生成项目完成记录（日志）。若任务已归属某项目则更新其
+            # 摘要/完成时间；否则按「每篇报告=一个已完成项目」自动建档，确保每次分析
+            # 完成都有可追溯的项目记录（完成时间/名称/摘要/引擎来源/字数）。
+            _auto_project_record(db, t, safe)
+        _emit(task_id, "done", safe, phase="output", progress_pct=100)
+    except Exception as e:  # noqa: BLE001
+        etype, ephase = _classify_error(e, last_phase["v"])
+        err_msg = _safe_error_text(e)
+        with SessionLocal() as db:
+            t = db.get(Task, task_id)
+            if t is not None:
+                t.status = "error"
+                t.error = err_msg
+                t.error_type = etype
+                t.error_phase = ephase
+                t.error_detail = err_msg
+                db.commit()
+        # 注意：必须在上面 with 块关闭前把要推送的字段取到局部变量；
+        # 否则 t 已脱离 Session，访问 t.error 会抛 DetachedInstanceError，
+        # 导致 WS 实时错误推送直接崩溃（前端收不到失败原因，只能靠 poll 兜底）。
+        _emit(task_id, "error", {"message": err_msg, "type": etype, "phase": ephase})
+
+
+def _auto_project_record(db, task, safe: dict) -> None:
+    """分析完成时自动生成/更新项目记录（需求1：项目完成日志）。
+
+    - 若任务已归属某项目（task.project_id）：更新该项目的完成时间、最新摘要、
+      章节数、字数、引擎来源，使其始终反映最新一次分析成果。
+    - 若未归属项目：自动以「task_id 派生项目」建档（每个已完成报告 = 一个独立已完成项目），
+      名称取报告标题，描述取 Markdown 首段摘要，确保任何分析都有可追溯记录。
+    """
+    from app.models import Project
+
+    md: str = safe.get("markdown") or ""
+    # 内容摘要：取 Markdown 首个非空段落（去掉标题 # 号），截断 200 字
+    summary = ""
+    for para in md.split("\n\n"):
+        p = para.strip().lstrip("#").strip()
+        if len(p) > 4:
+            summary = p[:200]
+            break
+    if not summary:
+        summary = (task.input_text or task.title or "（无摘要）")[:200]
+    char_count = len(md)
+    # 章节数：统计 Markdown 二级及以下标题数量
+    chapters = str(len([l for l in md.splitlines() if l.strip().startswith("##")]))
+    engine_label = "AI模型增强生成" if safe.get("engine_used") == "llm" else "规则引擎生成"
+    subjects = str(len(safe.get("network", {}).get("nodes", [])))
+
+    if task.project_id:
+        p = db.get(Project, task.project_id)
+        if p is not None:
+            p.description = summary
+            p.status = "已完成"
+            p.chapters = chapters
+            p.subjects = subjects
+            p.progress = "100%"
+            p.updated_at = _now()
+            db.commit()
+            return
+    # 未归属：自动建档（项目 id 与 task_id 解耦，避免与既有种子项目冲突）
+    pid = f"auto_{task.id}"
+    existing = db.get(Project, pid)
+    if existing is None:
+        p = Project(
+            id=pid,
+            name=task.title or "未命名分析",
+            description=summary,
+            status="已完成",
+            subjects=subjects,
+            interests=str(len(safe.get("network", {}).get("edges", []))),
+            chapters=chapters,
+            progress="100%",
+            owner_name=settings.default_owner_name,
+            owner_id=settings.default_owner_id,
+            is_archived=0,
+        )
+        db.add(p)
+        # 把任务挂到自动项目，便于项目详情聚合
+        task.project_id = pid
+    else:
+        existing.description = summary
+        existing.status = "已完成"
+        existing.chapters = chapters
+        existing.subjects = subjects
+        existing.progress = "100%"
+        existing.updated_at = _now()
+        task.project_id = pid
+    db.commit()
+
+
+async def _worker(worker_id: int) -> None:
+    from app.models import Task
+
+    while True:
+        tid = None
+        # 认领：串行加锁，确保同一任务只被一个工人取走
+        with _claim_lock:
+            with SessionLocal() as db:
+                t = (
+                    db.query(Task)
+                    .filter(Task.status == "queued")
+                    .order_by(Task.created_at.asc())
+                    .first()
+                )
+                if t is not None:
+                    tid = t.id
+                    t.status = "generating"
+                    db.commit()
+        if tid is not None:
+            await asyncio.to_thread(_process, tid)
+        else:
+            await asyncio.sleep(1.0)
+
+
+def start_workers() -> None:
+    """启动工人池（应用生命周期内常驻）。"""
+    global _workers
+    if _workers:
+        return
+    _workers = [asyncio.create_task(_worker(i)) for i in range(WORKER_COUNT)]

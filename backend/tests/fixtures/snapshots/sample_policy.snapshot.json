@@ -1,0 +1,16 @@
+{
+  "analysis_type": "policy",
+  "diagram_node_count": 5,
+  "diagram_edge_count": 3,
+  "required_sections": [
+    "独立事实摘要",
+    "分析框架说明",
+    "三元结构分析正文",
+    "结论与推导"
+  ],
+  "required_sections_present": true,
+  "concept_count": 4,
+  "has_copyright": true,
+  "has_diagram_block": true,
+  "markdown_length": 2487
+}
