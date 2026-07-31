@@ -1,1 +1,0 @@
-self.__REACT_LOADABLE_MANIFEST='{"components\\\\NetworkCanvas.tsx -> vis-network/standalone":{"id":4473,"files":["static/chunks/f7df2afc.78d123459d504308.js","static/chunks/473.4880cdf73f86063c.js"]}}';

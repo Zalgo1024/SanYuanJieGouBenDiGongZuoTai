@@ -27,6 +27,7 @@ backend/runtime/
 frontend/node_modules/
 frontend/.npm-cache/
 frontend/.next/
+frontend/.next_bak*/
 frontend/out/
 frontend/coverage/
 frontend/.env*.local
