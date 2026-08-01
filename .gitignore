@@ -16,7 +16,7 @@ _rebuild_reports.py
 .workbuddy/
 
 # ----- 生成的报告产物（docx/pdf/png/html，可由引擎再生，不入库） -----
-reports/
+/reports/
 
 # ----- backend 虚拟环境与运行时数据（源码入库，环境/产物不入库） -----
 backend/.venv/

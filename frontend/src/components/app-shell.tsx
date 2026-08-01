@@ -1,0 +1,100 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import {
+  BookOpen,
+  ChevronDown,
+  FileText,
+  FolderKanban,
+  LayoutGrid,
+  Network,
+  Plus,
+  Settings,
+  Sparkles,
+  Workflow,
+} from "lucide-react";
+import React, { useState } from "react";
+import { useAppStore } from "@/lib/store";
+import { NavigationBackButton } from "./navigation-back-button";
+
+const navigation = [
+  { href: "/dashboard", label: "工作台", icon: LayoutGrid },
+  { href: "/analysis", label: "新建分析", icon: Plus },
+  { href: "/projects", label: "项目", icon: FolderKanban },
+  { href: "/materials", label: "材料库", icon: BookOpen },
+  { href: "/reports", label: "报告", icon: FileText },
+  { href: "/interest-analysis", label: "利益拆解", icon: Network },
+  { href: "/settings", label: "设置", icon: Settings },
+];
+
+function isActive(pathname: string, href: string) {
+  return href === "/dashboard" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
+}
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const { state } = useAppStore();
+  const [profileOpen, setProfileOpen] = useState(false);
+  const engineLabel = state.settings.defaultEngine === "llm" ? "语言增强已就绪" : "规则引擎已就绪";
+
+  return (
+    <main className="app-shell">
+      <aside className="app-sidebar">
+        <Link className="app-brand" href="/" aria-label="返回产品首页" title="返回产品首页">
+          <span>三</span>
+          <div><strong>Triad</strong><small>Structure Analysis</small></div>
+        </Link>
+        <nav className="app-navigation" aria-label="主导航">
+          {navigation.map(({ href, label, icon: Icon }) => (
+            <Link
+              className={isActive(pathname, href) ? "app-navigation__item app-navigation__item--active" : "app-navigation__item"}
+              href={href}
+              key={href}
+            >
+              <Icon size={18} /><span>{label}</span>
+            </Link>
+          ))}
+        </nav>
+        <div className="app-sidebar__footer">
+          <div className="app-engine-status"><Sparkles size={15} /><span>{engineLabel}</span></div>
+          <div className="app-profile-wrap">
+            <button
+              className="app-profile"
+              type="button"
+              aria-label="打开账户菜单"
+              aria-expanded={profileOpen}
+              onClick={() => setProfileOpen((current) => !current)}
+            >
+              <span>林</span>
+              <div><strong>林知远</strong><small>分析研究员</small></div>
+              <ChevronDown size={15} />
+            </button>
+            {profileOpen && (
+              <div className="app-profile-menu">
+                <span>本地研究工作空间</span>
+                <Link href="/settings" onClick={() => setProfileOpen(false)}>工作空间设置</Link>
+                <Link href="/" onClick={() => setProfileOpen(false)}>返回产品首页</Link>
+              </div>
+            )}
+          </div>
+        </div>
+      </aside>
+      <section className="app-stage">
+        <header className="app-topbar">
+          <div className="app-topbar__context">
+            <NavigationBackButton />
+            <span className="app-topbar__divider" aria-hidden="true" />
+            <Workflow size={17} />
+            <span className="app-topbar__label">三元结构分析空间</span>
+          </div>
+          <div className="app-topbar__right">
+            <span className="app-topbar__mode">本地工作空间</span>
+            <Link className="topbar-create" href="/analysis"><Plus size={16} />新建分析</Link>
+          </div>
+        </header>
+        <div className="app-page">{children}</div>
+      </section>
+    </main>
+  );
+}
