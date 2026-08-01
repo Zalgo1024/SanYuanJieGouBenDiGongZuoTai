@@ -4,7 +4,6 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "dev:local": "powershell -ExecutionPolicy Bypass -File scripts/start-local.ps1",
     "build": "next build",
     "start": "next start",
     "test": "vitest run",

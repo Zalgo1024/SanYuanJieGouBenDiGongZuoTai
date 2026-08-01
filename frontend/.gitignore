@@ -6,6 +6,8 @@
 # next.js build output
 /.next/
 /.next-dev/
+/.next-staging/
+/.next-previous/
 /.next_bak*/
 /out/
 /coverage/

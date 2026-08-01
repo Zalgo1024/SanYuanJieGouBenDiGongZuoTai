@@ -75,10 +75,13 @@ project_root/（本仓库 = 内核 + 后端 API + Next.js 前端完整项目）
 ```
 - 前端 Next.js :3000；启动后自动打开 `http://127.0.0.1:3000`
 - 后端 FastAPI :8000（绑 127.0.0.1，优先用 `backend/.venv`；缺失则回退系统 python），交互文档位于 `http://127.0.0.1:8000/docs`
+- `start.bat` 使用 Next.js 生产模式；构建缺失或源码较新时自动执行前端构建，健康服务会直接复用，不重复启动
+- 双击 `status.bat` 查看端口、PID、归属和健康状态；双击 `stop.bat` 只停止经命令行确认属于本仓库的进程
+- 运行日志和状态保存在 `.runtime/`（不入库）；端口被外部程序占用时启动器会报错并拒绝误杀
 - 数据全本机：SQLite `backend/data/app.db` + 产物 `backend/generated/`（不入库）
 - LLM/搜索密钥：仅存 `backend/.env` 或 `backend/data/llm_settings.json`，绝不提交
 - 前端环境与构建产物：`frontend/node_modules/`、`frontend/.next/`、`frontend/.env*` 绝不提交
-- 手动启动（不双击）：`cd backend && .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000`
+- 手动控制（不双击）：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\local-workbench.ps1 -Action start|status|stop`
 
 ### 项目边界
 

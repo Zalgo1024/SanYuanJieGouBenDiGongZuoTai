@@ -8,6 +8,7 @@ __pycache__/
 reasonix.toml
 *.log
 lo_install.log
+/.runtime/
 
 # ----- 本次整治的临时反推脚本（非项目资产）-----
 _rebuild_reports.py
