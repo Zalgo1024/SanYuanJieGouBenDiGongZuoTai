@@ -4,19 +4,14 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 /**
- * 根路径入口：与 AuthGate 保持一致，改用客户端导航，
- * 避免服务端 redirect() 与布局内 AuthGate 的客户端 router.replace()
- * 在 hydration 阶段冲突，导致 Next.js 报
- * "Rendered more hooks than during the previous render" 而整页崩溃。
+ * 根路径 = 落地首页：直接整页跳转到静态展示页 showcase.html。
+ * 展示页是独立 HTML 文档（含内联 CSS/JS 与 canvas 动画），
+ * 用整页跳转而非 Next 客户端路由，避免把它当 route 处理导致资源加载异常。
  */
 export default function Home() {
-  const router = useRouter();
-
   useEffect(() => {
-    const token =
-      typeof window !== "undefined" ? localStorage.getItem("tsap_token") : null;
-    router.replace(token ? "/dashboard" : "/login");
-  }, [router]);
+    window.location.href = "/showcase.html";
+  }, []);
 
   return null;
 }
