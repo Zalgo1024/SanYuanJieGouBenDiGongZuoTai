@@ -1,110 +1,122 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useReducer, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState } from "react";
 import {
   defaultSettings,
   type AnalysisTask,
   type AppState,
-  type MaterialRecord,
-  type NewAnalysisInput,
-  type Project,
   type Report,
   type WorkspaceSettings,
 } from "./domain";
-import { createReportDraft, seedState } from "./seed-data";
-import { apiRequest } from "./api";
+import { seedState } from "./seed-data";
+import { fetchCurrentReport, fetchTaskById, fetchWorkspaceSnapshot } from "./workspace-api";
 
 export const STORAGE_KEY = "triad-analysis-workbench.v1";
+export type ConnectionState = "checking" | "online" | "offline" | "demo";
 
 type AppAction =
-  | { type: "HYDRATE"; state: AppState }
-  | { type: "CREATE_TASK"; project?: Project; task: AnalysisTask }
-  | { type: "ADD_TASK"; task: AnalysisTask }
+  | { type: "HYDRATE_DATA"; data: Pick<AppState, "projects" | "tasks" | "reports" | "materials">; requestedAt: string }
+  | { type: "UPSERT_TASK"; task: AnalysisTask }
+  | { type: "UPSERT_REPORT"; report: Report }
+  | { type: "REMOVE_REPORTS"; reportIds: string[] }
   | { type: "UPDATE_TASK_PROGRESS"; taskId: string; status: AnalysisTask["status"]; phase: AnalysisTask["phase"]; progress: number; updatedAt: string }
-  | { type: "ADD_MATERIALS"; materials: MaterialRecord[] }
-  | { type: "CREATE_REPORT"; report: Report }
-  | { type: "DELETE_REPORTS"; reportIds: string[] }
-  | { type: "UPDATE_REPORT"; reportId: string; markdown: string; updatedAt: string }
   | { type: "UPDATE_SETTINGS"; settings: Partial<WorkspaceSettings> };
 
-interface AppStoreValue {
+export interface AppStoreValue {
   state: AppState;
   hydrated: boolean;
-  createTask: (input: NewAnalysisInput) => string;
-  loadTask: (taskId: string) => Promise<void>;
-  createReport: (taskId: string) => string | null;
+  connection: ConnectionState;
+  connectionError: string;
+  refreshWorkspace: () => Promise<void>;
+  loadTask: (taskId: string) => Promise<AnalysisTask | null>;
+  loadReport: (taskId: string) => Promise<Report | null>;
   deleteReports: (reportIds: string[]) => void;
-  updateReport: (reportId: string, markdown: string) => void;
   updateTaskProgress: (taskId: string, update: Pick<AnalysisTask, "status" | "phase" | "progress">) => void;
-  addMaterials: (names: string[]) => void;
   updateSettings: (settings: Partial<WorkspaceSettings>) => void;
 }
 
-type StoredReport = Omit<Report, "revisions"> & { revisions?: Report["revisions"] };
-type StoredMaterial = Omit<MaterialRecord, "status"> & { status?: MaterialRecord["status"] };
-interface StoredState {
-  version?: number;
-  projects?: AppState["projects"];
-  tasks?: AppState["tasks"];
-  reports?: StoredReport[];
-  materials?: StoredMaterial[];
+interface StoredPreferences {
   settings?: Partial<WorkspaceSettings>;
 }
 
 const AppStoreContext = createContext<AppStoreValue | null>(null);
 
-export function createEmptyState(): AppState {
-  return { version: 2, projects: [], tasks: [], reports: [], materials: [], settings: defaultSettings };
+export function createEmptyState(settings: WorkspaceSettings = defaultSettings): AppState {
+  return { version: 2, projects: [], tasks: [], reports: [], materials: [], settings };
+}
+
+export function createInitialState(demoMode: boolean): AppState {
+  return demoMode ? seedState : createEmptyState();
+}
+
+export function parseStoredSettings(raw: string | null): WorkspaceSettings {
+  if (!raw) return defaultSettings;
+  try {
+    const parsed = JSON.parse(raw) as StoredPreferences;
+    const settings = parsed.settings ?? {};
+    return {
+      defaultEngine: settings.defaultEngine === "llm" ? "llm" : "rule",
+      theme: settings.theme === "dark" ? "dark" : "light",
+      defaultExport: settings.defaultExport === "html" ? "html" : "markdown",
+    };
+  } catch {
+    return defaultSettings;
+  }
+}
+
+function mergeSnapshotItems<T extends { id: string; updatedAt: string }>(current: T[], incoming: T[], requestedAt: string): T[] {
+  const requestTime = Date.parse(requestedAt);
+  const currentById = new Map(current.map((item) => [item.id, item]));
+  const incomingIds = new Set(incoming.map((item) => item.id));
+  const merged = incoming.map((item) => {
+    const local = currentById.get(item.id);
+    return local && Date.parse(local.updatedAt) > requestTime ? local : item;
+  });
+  return [
+    ...merged,
+    ...current.filter((item) => !incomingIds.has(item.id) && Date.parse(item.updatedAt) > requestTime),
+  ];
 }
 
 export function appReducer(state: AppState, action: AppAction): AppState {
-  if (action.type === "HYDRATE") return action.state;
-  if (action.type === "CREATE_TASK") {
+  if (action.type === "HYDRATE_DATA") return {
+    ...state,
+    projects: mergeSnapshotItems(state.projects, action.data.projects, action.requestedAt),
+    tasks: mergeSnapshotItems(state.tasks, action.data.tasks, action.requestedAt),
+    reports: mergeSnapshotItems(state.reports, action.data.reports, action.requestedAt),
+    materials: mergeSnapshotItems(state.materials, action.data.materials, action.requestedAt),
+  };
+  if (action.type === "UPSERT_TASK") {
+    const exists = state.tasks.some((task) => task.id === action.task.id);
     return {
       ...state,
-      projects: action.project ? [action.project, ...state.projects] : state.projects,
-      tasks: [action.task, ...state.tasks],
+      tasks: exists
+        ? state.tasks.map((task) => task.id === action.task.id ? action.task : task)
+        : [action.task, ...state.tasks],
     };
   }
-  if (action.type === "ADD_TASK") {
-    if (state.tasks.some((task) => task.id === action.task.id)) return state;
-    return { ...state, tasks: [action.task, ...state.tasks] };
+  if (action.type === "UPSERT_REPORT") {
+    const exists = state.reports.some((report) => report.id === action.report.id);
+    return {
+      ...state,
+      reports: exists
+        ? state.reports.map((report) => report.id === action.report.id ? action.report : report)
+        : [action.report, ...state.reports],
+    };
+  }
+  if (action.type === "REMOVE_REPORTS") {
+    const ids = new Set(action.reportIds);
+    return { ...state, reports: state.reports.filter((report) => !ids.has(report.id)) };
   }
   if (action.type === "UPDATE_TASK_PROGRESS") {
     return {
       ...state,
-      tasks: state.tasks.map((task) => task.id === action.taskId ? { ...task, status: action.status, phase: action.phase, progress: action.progress, updatedAt: action.updatedAt } : task),
-      projects: state.projects.map((project) => state.tasks.some((task) => task.id === action.taskId && task.projectId === project.id) ? { ...project, progress: action.progress, updatedAt: action.updatedAt } : project),
-    };
-  }
-  if (action.type === "CREATE_REPORT") {
-    if (state.reports.some((report) => report.taskId === action.report.taskId)) return state;
-    return { ...state, reports: [action.report, ...state.reports] };
-  }
-  if (action.type === "DELETE_REPORTS") {
-    const reportIds = new Set(action.reportIds);
-    return { ...state, reports: state.reports.filter((report) => !reportIds.has(report.id)) };
-  }
-  if (action.type === "ADD_MATERIALS") {
-    return { ...state, materials: [...action.materials, ...state.materials] };
-  }
-  if (action.type === "UPDATE_REPORT") {
-    return {
-      ...state,
-      reports: state.reports.map((report) =>
-        report.id === action.reportId
-          ? {
-              ...report,
-              markdown: action.markdown,
-              updatedAt: action.updatedAt,
-              version: report.version + 1,
-              revisions: [
-                ...(report.revisions ?? []),
-                { version: report.version, markdown: report.markdown, updatedAt: report.updatedAt },
-              ],
-            }
-          : report,
-      ),
+      tasks: state.tasks.map((task) => task.id === action.taskId
+        ? { ...task, status: action.status, phase: action.phase, progress: action.progress, updatedAt: action.updatedAt }
+        : task),
+      projects: state.projects.map((project) => state.tasks.some((task) => task.id === action.taskId && task.projectId === project.id)
+        ? { ...project, progress: action.progress, updatedAt: action.updatedAt }
+        : project),
     };
   }
   if (action.type === "UPDATE_SETTINGS") {
@@ -113,145 +125,89 @@ export function appReducer(state: AppState, action: AppAction): AppState {
   return state;
 }
 
-export function parseStoredState(raw: string | null): AppState {
-  if (!raw) return seedState;
-  try {
-    const parsed = JSON.parse(raw) as StoredState;
-    if (
-      (parsed.version !== 1 && parsed.version !== 2) ||
-      !Array.isArray(parsed.projects) ||
-      !Array.isArray(parsed.tasks) ||
-      !Array.isArray(parsed.reports) ||
-      !Array.isArray(parsed.materials)
-    ) {
-      return seedState;
-    }
-    return {
-      version: 2,
-      projects: parsed.projects,
-      tasks: parsed.tasks,
-      reports: parsed.reports.map((report) => ({ ...report, revisions: report.revisions ?? [] })),
-      materials: parsed.materials.map((material) => ({ ...material, status: material.status ?? "ready" })),
-      settings: { ...defaultSettings, ...(parsed.settings ?? {}) },
-    };
-  } catch {
-    return seedState;
-  }
-}
-
-function makeId(prefix: string) {
-  const suffix = typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  return `${prefix}-${suffix}`;
-}
-
-function mapTask(item: {
-  task_id: string;
-  title: string;
-  status: string;
-  analysis_type: string;
-  project_id: string | null;
-  created_at: string | null;
-}): AnalysisTask {
-  return {
-    id: item.task_id,
-    projectId: item.project_id ?? "",
-    type: (item.analysis_type as AnalysisTask["type"]) ?? "case",
-    title: item.title,
-    context: "",
-    engine: "rule" as AnalysisTask["engine"],
-    materialIds: [],
-    status: (item.status as AnalysisTask["status"]) ?? "queued",
-    phase: "output" as AnalysisTask["phase"],
-    progress: item.status === "done" ? 100 : 0,
-    createdAt: item.created_at ?? new Date().toISOString(),
-    updatedAt: item.created_at ?? new Date().toISOString(),
-  };
+function errorMessage(reason: unknown) {
+  return reason instanceof Error ? reason.message : "无法连接本地分析后端";
 }
 
 export function AppStoreProvider({
   children,
   initialState,
-  persist = true,
+  demoMode,
 }: {
   children: React.ReactNode;
   initialState?: AppState;
-  persist?: boolean;
+  demoMode?: boolean;
 }) {
-  const [state, dispatch] = useReducer(appReducer, initialState ?? seedState);
-  const [hydrated, setHydrated] = useState(Boolean(initialState) || !persist);
+  const demo = demoMode ?? process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+  const [state, dispatch] = useReducer(appReducer, initialState ?? createInitialState(demo));
+  const [hydrated, setHydrated] = useState(Boolean(initialState) || demo);
+  const [connection, setConnection] = useState<ConnectionState>(demo ? "demo" : initialState ? "online" : "checking");
+  const [connectionError, setConnectionError] = useState("");
   const [notice, setNotice] = useState("");
 
-  useEffect(() => {
-    if (!persist || initialState) return;
-    dispatch({ type: "HYDRATE", state: parseStoredState(window.localStorage.getItem(STORAGE_KEY)) });
-    setHydrated(true);
-  }, [initialState, persist]);
-
-  useEffect(() => {
-    if (persist && hydrated) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [hydrated, persist, state]);
-
-  useEffect(() => {
-    // 分析skill 后端无鉴权，本地单用户直接拉取。
-    let cancelled = false;
-    async function hydrateFromApi() {
-      try {
-        const [projectsResponse, materialsResponse, tasksResponse] = await Promise.all([
-          apiRequest<Array<{ id: string; name: string; description: string | null; status: string; progress: string | number; is_archived: boolean; updated_at: string | null }>>("/api/projects"),
-          apiRequest<Array<{ id: string; title: string; source_type: string; source: string | null; tags: string | null; created_at: string | null }>>("/api/materials"),
-          apiRequest<Array<{ task_id: string; title: string; status: string; analysis_type: string; project_id: string | null; created_at: string | null }>>("/api/tasks"),
-        ]);
-        if (cancelled) return;
-        const tasks: AnalysisTask[] = tasksResponse.map(mapTask);
-        // 已完成任务：拉取报告正文构建 Report 列表
-        const reports: Report[] = [];
-        await Promise.all(
-          tasks
-            .filter((task) => task.status === "done")
-            .map(async (task) => {
-              try {
-                const r = await apiRequest<{ status: string; data?: { markdown?: string } }>(`/api/analyze/${task.id}`);
-                if (r.status === "done" && r.data?.markdown) {
-                  reports.push({ id: task.id, taskId: task.id, type: task.type, title: task.title, markdown: r.data.markdown, version: 1, updatedAt: task.updatedAt, nodes: [], revisions: [] });
-                }
-              } catch { /* 单个失败不影响其余 */ }
-            })
-        );
-        if (cancelled) return;
-        dispatch({
-          type: "HYDRATE",
-          state: {
-            ...state,
-            projects: projectsResponse.map((item) => ({
-              id: item.id,
-              name: item.name,
-              description: item.description ?? "",
-              type: "case" as Project["type"],
-              status: item.is_archived ? "archived" : "active",
-              progress: Number(item.progress) || 0,
-              updatedAt: item.updated_at ?? new Date().toISOString(),
-            })),
-            materials: materialsResponse.map((item) => ({
-              id: item.id,
-              name: item.title,
-              kind: (["file", "link", "note"].includes(item.source_type) ? item.source_type : "file") as MaterialRecord["kind"],
-              note: item.source ?? item.tags ?? "",
-              updatedAt: item.created_at ?? new Date().toISOString(),
-              status: "ready" as MaterialRecord["status"],
-            })),
-            tasks,
-            reports,
-          },
-        });
-      } catch {
-        // 后端暂不可用时保留本地草稿状态
-      }
+  const refreshWorkspace = useCallback(async () => {
+    if (demo) return;
+    setConnection("checking");
+    setConnectionError("");
+    const requestedAt = new Date().toISOString();
+    try {
+      const snapshot = await fetchWorkspaceSnapshot();
+      dispatch({ type: "HYDRATE_DATA", data: snapshot, requestedAt });
+      setConnection("online");
+    } catch (reason) {
+      setConnection("offline");
+      setConnectionError(errorMessage(reason));
+    } finally {
+      setHydrated(true);
     }
-    void hydrateFromApi();
-    return () => { cancelled = true; };
-  }, []);
+  }, [demo]);
+
+  const loadTask = useCallback(async (taskId: string) => {
+    if (demo) return state.tasks.find((task) => task.id === taskId) ?? null;
+    try {
+      const task = await fetchTaskById(taskId);
+      if (task) dispatch({ type: "UPSERT_TASK", task });
+      setConnection("online");
+      setConnectionError("");
+      return task;
+    } catch (reason) {
+      setConnection("offline");
+      setConnectionError(errorMessage(reason));
+      return null;
+    }
+  }, [demo, state.tasks]);
+
+  const loadReport = useCallback(async (taskId: string) => {
+    if (demo) return state.reports.find((report) => report.taskId === taskId) ?? null;
+    try {
+      let task = state.tasks.find((candidate) => candidate.id === taskId) ?? null;
+      if (!task) {
+        task = await fetchTaskById(taskId);
+        if (task) dispatch({ type: "UPSERT_TASK", task });
+      }
+      if (!task) return null;
+      const report = await fetchCurrentReport(task);
+      if (report) dispatch({ type: "UPSERT_REPORT", report });
+      setConnection("online");
+      setConnectionError("");
+      return report;
+    } catch (reason) {
+      setConnection("offline");
+      setConnectionError(errorMessage(reason));
+      return null;
+    }
+  }, [demo, state.reports, state.tasks]);
+
+  useEffect(() => {
+    if (initialState || demo) return;
+    dispatch({ type: "UPDATE_SETTINGS", settings: parseStoredSettings(window.localStorage.getItem(STORAGE_KEY)) });
+    void refreshWorkspace();
+  }, [demo, initialState, refreshWorkspace]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, settings: state.settings }));
+  }, [hydrated, state.settings]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = state.settings.theme;
@@ -266,86 +222,24 @@ export function AppStoreProvider({
   const value = useMemo<AppStoreValue>(() => ({
     state,
     hydrated,
-    createTask(input) {
-      const now = new Date().toISOString();
-      const projectId = input.projectId ?? makeId("project");
-      const project = input.projectId ? undefined : {
-        id: projectId,
-        name: input.title,
-        description: input.context || "尚未补充项目背景。",
-        type: input.type,
-        status: "active" as const,
-        progress: 8,
-        updatedAt: now,
-      };
-      const task: AnalysisTask = {
-        id: makeId("analysis"),
-        projectId,
-        type: input.type,
-        title: input.title,
-        context: input.context,
-        engine: input.engine,
-        materialIds: input.materialIds,
-        status: "generating",
-        phase: "inspect",
-        progress: 8,
-        createdAt: now,
-        updatedAt: now,
-      };
-      dispatch({ type: "CREATE_TASK", project, task });
-      setNotice(input.projectId ? "分析任务已加入项目" : "项目与分析任务已创建");
-      return task.id;
-    },
-    async loadTask(taskId) {
-      try {
-        const list = await apiRequest<Array<{ task_id: string; title: string; status: string; analysis_type: string; project_id: string | null; created_at: string | null }>>("/api/tasks");
-        const item = list.find((t) => t.task_id === taskId);
-        if (!item) return;
-        dispatch({ type: "ADD_TASK", task: mapTask(item) });
-      } catch { /* 忽略：后端暂不可用 */ }
-    },
-    createReport(taskId) {
-      const existing = state.reports.find((report) => report.taskId === taskId);
-      if (existing) return existing.id;
-      const task = state.tasks.find((item) => item.id === taskId);
-      if (!task) return null;
-      const report = createReportDraft(task, makeId("report"), new Date().toISOString());
-      dispatch({ type: "CREATE_REPORT", report });
-      setNotice("报告初稿已生成");
-      return report.id;
-    },
+    connection,
+    connectionError,
+    refreshWorkspace,
+    loadTask,
+    loadReport,
     deleteReports(reportIds) {
       if (!reportIds.length) return;
-      dispatch({ type: "DELETE_REPORTS", reportIds });
+      dispatch({ type: "REMOVE_REPORTS", reportIds });
       setNotice(`已删除 ${reportIds.length} 份报告`);
-    },
-    updateReport(reportId, markdown) {
-      dispatch({ type: "UPDATE_REPORT", reportId, markdown, updatedAt: new Date().toISOString() });
-      setNotice("新报告版本已保存");
     },
     updateTaskProgress(taskId, update) {
       dispatch({ type: "UPDATE_TASK_PROGRESS", taskId, ...update, updatedAt: new Date().toISOString() });
-    },
-    addMaterials(names) {
-      const now = new Date().toISOString();
-      dispatch({
-        type: "ADD_MATERIALS",
-        materials: names.map((name) => ({
-          id: makeId("material"),
-          name,
-          kind: "file",
-          note: "待关联到分析任务",
-          updatedAt: now,
-          status: "pending",
-        })),
-      });
-      setNotice(`已导入 ${names.length} 份材料，等待解析`);
     },
     updateSettings(settings) {
       dispatch({ type: "UPDATE_SETTINGS", settings });
       setNotice("工作空间设置已更新");
     },
-  }), [hydrated, state]);
+  }), [connection, connectionError, hydrated, loadReport, loadTask, refreshWorkspace, state]);
 
   return (
     <AppStoreContext.Provider value={value}>

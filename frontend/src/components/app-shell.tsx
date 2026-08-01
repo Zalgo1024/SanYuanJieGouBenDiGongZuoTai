@@ -10,8 +10,10 @@ import {
   LayoutGrid,
   Network,
   Plus,
+  RefreshCw,
   Settings,
   Sparkles,
+  TriangleAlert,
   Workflow,
 } from "lucide-react";
 import React, { useState } from "react";
@@ -34,7 +36,7 @@ function isActive(pathname: string, href: string) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { state } = useAppStore();
+  const { state, connection, connectionError, refreshWorkspace } = useAppStore();
   const [profileOpen, setProfileOpen] = useState(false);
   const engineLabel = state.settings.defaultEngine === "llm" ? "语言增强已就绪" : "规则引擎已就绪";
 
@@ -89,10 +91,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="app-topbar__label">三元结构分析空间</span>
           </div>
           <div className="app-topbar__right">
-            <span className="app-topbar__mode">本地工作空间</span>
+            <span className="app-topbar__mode">{connection === "demo" ? "演示数据" : connection === "checking" ? "正在连接后端" : "本地工作空间"}</span>
             <Link className="topbar-create" href="/analysis"><Plus size={16} />新建分析</Link>
           </div>
         </header>
+        {connection === "offline" && (
+          <div className="backend-status backend-status--offline" role="alert">
+            <TriangleAlert size={17} />
+            <div><strong>本地后端未连接</strong><span>{connectionError || "无法读取真实项目和报告，请确认后端已经启动。"}</span></div>
+            <button type="button" onClick={() => void refreshWorkspace()}><RefreshCw size={14} />重新连接</button>
+          </div>
+        )}
+        {connection === "demo" && (
+          <div className="backend-status backend-status--demo" role="status">
+            <TriangleAlert size={17} />
+            <div><strong>当前为演示数据</strong><span>这些项目和报告不来自本地后端。</span></div>
+          </div>
+        )}
         <div className="app-page">{children}</div>
       </section>
     </main>

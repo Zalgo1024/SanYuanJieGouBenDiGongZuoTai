@@ -7,11 +7,17 @@ import { MarkdownReport } from "@/lib/markdown";
 
 type LoadState = "loading" | "ready" | "missing" | "error";
 
-export function AnalysisNetwork({ taskId }: { taskId: string }) {
-  const [markdown, setMarkdown] = useState<string | null>(null);
-  const [state, setState] = useState<LoadState>("loading");
+export function AnalysisNetwork({ taskId, markdown: currentMarkdown }: { taskId: string; markdown?: string }) {
+  const [markdown, setMarkdown] = useState<string | null>(currentMarkdown ?? null);
+  const [state, setState] = useState<LoadState>(currentMarkdown ? "ready" : "loading");
 
   useEffect(() => {
+    if (currentMarkdown) {
+      setMarkdown(currentMarkdown);
+      setState("ready");
+      return;
+    }
+
     let active = true;
     setState("loading");
     apiRequest<{ status: string; data?: { markdown?: string } }>(`/api/analyze/${taskId}`)
@@ -28,7 +34,7 @@ export function AnalysisNetwork({ taskId }: { taskId: string }) {
       })
       .catch(() => { if (active) setState("missing"); });
     return () => { active = false; };
-  }, [taskId]);
+  }, [currentMarkdown, taskId]);
 
   if (state === "loading") return <section className="network-loading" aria-busy="true">正在读取结构拆解…</section>;
   if (state === "error") return <div className="workbench-network"><Network size={24} /><div><span className="eyebrow">结构拆解</span><h2>该任务未能生成报告</h2><p>后端返回错误，请重试或检查输入线索。</p></div></div>;

@@ -2,25 +2,20 @@
 
 import { useEffect, useRef } from "react";
 import { WS_BASE } from "./api";
-import type { AnalysisTask } from "./domain";
 import { useAppStore } from "./store";
-
-interface ProgressEvent {
-  task_id: string;
-  status: AnalysisTask["status"];
-  phase: AnalysisTask["phase"];
-  progress: number;
-}
+import { normalizeTaskPhase, normalizeTaskStatus } from "./workspace-api";
 
 // 后端通过 WebSocket 推送任务进度：/ws/progress/{task_id}
 // 消息形如 { status, data, phase?, progress_pct? }。
-export function useTaskProgress(taskId: string) {
-  const { updateTaskProgress } = useAppStore();
+export function useTaskProgress(taskId: string, enabled = true) {
+  const { updateTaskProgress, loadReport } = useAppStore();
   const updateRef = useRef(updateTaskProgress);
+  const loadReportRef = useRef(loadReport);
   updateRef.current = updateTaskProgress;
+  loadReportRef.current = loadReport;
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !enabled) return;
     const ws = new WebSocket(`${WS_BASE}/ws/progress/${taskId}`);
     ws.onmessage = (event: MessageEvent<string>) => {
       try {
@@ -32,7 +27,7 @@ export function useTaskProgress(taskId: string) {
           data?: unknown;
         };
         if (!payload.status) return;
-        const status = payload.status as AnalysisTask["status"];
+        const status = normalizeTaskStatus(payload.status);
         const progress =
           status === "done"
             ? 100
@@ -43,13 +38,14 @@ export function useTaskProgress(taskId: string) {
                 : 0;
         updateRef.current(taskId, {
           status,
-          phase: (payload.phase as AnalysisTask["phase"]) ?? "output",
+          phase: normalizeTaskPhase(payload.phase, status),
           progress,
         });
+        if (status === "done") void loadReportRef.current(taskId);
       } catch {
         // 忽略畸形消息，等待下一次快照恢复 UI。
       }
     };
     return () => { ws.close(); };
-  }, [taskId]);
+  }, [enabled, taskId]);
 }

@@ -10,7 +10,7 @@ import { reportTitleFromMarkdown } from "@/lib/server-report";
 
 export function ReportEditor({ reportId }: { reportId: string }) {
   const router = useRouter();
-  const { state, hydrated, updateReport } = useAppStore();
+  const { state, hydrated, loadReport } = useAppStore();
   const report = state.reports.find((item) => item.id === reportId);
   const [markdown, setMarkdown] = useState(report?.markdown ?? "");
   const [saveError, setSaveError] = useState("");
@@ -38,7 +38,8 @@ export function ReportEditor({ reportId }: { reportId: string }) {
           note: reportTitleFromMarkdown(markdown, report.title),
         }),
       });
-      updateReport(reportId, markdown);
+      const synced = await loadReport(reportId);
+      if (!synced) throw new Error("新版本已保存，但未能从后端读取当前版本。请保持本页并重新连接后再试。");
       router.push(`/reports/${reportId}`);
     } catch (reason) {
       setSaveError(reason instanceof Error ? reason.message : "报告保存失败，请稍后重试。");

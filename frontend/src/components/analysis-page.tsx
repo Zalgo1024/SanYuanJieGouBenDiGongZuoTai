@@ -10,7 +10,7 @@ import { AnalysisCreation } from "./analysis-creation";
 export function AnalysisPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { createTask, state } = useAppStore();
+  const { state, refreshWorkspace } = useAppStore();
   const reportId = searchParams.get("reportId");
   const purpose = searchParams.get("purpose");
   const sourceReport = state.reports.find((report) => report.id === reportId);
@@ -43,17 +43,19 @@ export function AnalysisPage() {
     const responses = await Promise.all(files.map(async (file) => {
       const body = new FormData();
       body.append("file", file);
-      const result = await apiRequest<{ id: string; title: string; source_type: string; source: string | null; created_at: string | null }>("/api/materials/upload", { method: "POST", body });
+      const result = await apiRequest<{ id: string; title: string; source_type: string; source: string | null; warnings?: string[]; created_at: string | null }>("/api/materials/upload", { method: "POST", body });
       const kind: MaterialRecord["kind"] = result.source_type === "link" ? "link" : result.source_type === "note" ? "note" : "file";
+      const warnings = result.warnings ?? [];
       return {
         id: result.id,
         name: result.title,
         kind,
-        note: result.source ?? "",
+        note: warnings.length ? `解析告警：${warnings.join("、")}` : result.source ?? "",
         updatedAt: result.created_at ?? new Date().toISOString(),
-        status: "ready" as const,
+        status: warnings.length ? "error" as const : "ready" as const,
       };
     }));
+    await refreshWorkspace();
     return responses;
   }
 
