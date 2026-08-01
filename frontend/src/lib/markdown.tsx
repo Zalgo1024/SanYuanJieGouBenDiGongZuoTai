@@ -1,51 +1,74 @@
 import React from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-interface Block { type: "h1" | "h2" | "h3" | "p" | "ul"; text: string; }
-
-function parseMarkdown(markdown: string): Block[] {
-  const blocks: Block[] = [];
-  for (const raw of markdown.split("\n")) {
-    const line = raw.trimEnd();
-    if (!line.trim()) continue;
-    if (line.startsWith("### ")) blocks.push({ type: "h3", text: line.slice(4) });
-    else if (line.startsWith("## ")) blocks.push({ type: "h2", text: line.slice(3) });
-    else if (line.startsWith("# ")) blocks.push({ type: "h1", text: line.slice(2) });
-    else if (/^[-*]\s+/.test(line)) {
-      const item = line.replace(/^[-*]\s+/, "");
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === "ul") last.text += `\n${item}`;
-      else blocks.push({ type: "ul", text: item });
-    } else {
-      const last = blocks[blocks.length - 1];
-      if (last && last.type === "p") last.text += `\n${line}`;
-      else blocks.push({ type: "p", text: line });
-    }
-  }
-  return blocks;
+export interface ReportOutlineItem {
+  id: string;
+  label: string;
 }
 
-function renderInline(text: string): React.ReactNode {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    }
-    return part;
-  });
+const diagramPattern = /^[ \t]{0,3}(`{3,}|~{3,})[ \t]*DIAGRAM[^\r\n]*\r?\n[\s\S]*?^[ \t]{0,3}\1[ \t]*$/gim;
+
+interface MarkdownNode {
+  type?: string;
+  lang?: string | null;
+  children?: MarkdownNode[];
 }
 
-export function MarkdownReport({ markdown }: { markdown: string }) {
-  const blocks = parseMarkdown(markdown);
+function remarkStripDiagram() {
+  return (tree: MarkdownNode) => {
+    const visit = (node: MarkdownNode) => {
+      if (!node.children) return;
+      node.children = node.children.filter((child) => !(child.type === "code" && child.lang?.toLowerCase() === "diagram"));
+      node.children.forEach(visit);
+    };
+    visit(tree);
+  };
+}
+
+export function stripDiagramBlocks(markdown: string): string {
+  return markdown.replace(diagramPattern, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function plainHeading(value: string): string {
+  return value
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[*_~`]/g, "")
+    .trim();
+}
+
+export function extractReportOutline(markdown: string): ReportOutlineItem[] {
+  return stripDiagramBlocks(markdown)
+    .split(/\r?\n/)
+    .filter((line) => /^##\s+/.test(line))
+    .map((line, index) => ({
+      id: `report-section-${index + 1}`,
+      label: plainHeading(line.replace(/^##\s+/, "")),
+    }));
+}
+
+export function MarkdownReport({ markdown, hideTitle = false }: { markdown: string; hideTitle?: boolean }) {
+  let sectionIndex = 0;
+  const components: Components = {
+    h1: ({ children }) => hideTitle ? null : <h1 className="report-h1">{children}</h1>,
+    h2: ({ children }) => {
+      sectionIndex += 1;
+      return <h2 id={`report-section-${sectionIndex}`} className="report-h2">{children}</h2>;
+    },
+    h3: ({ children }) => <h3 className="report-h3">{children}</h3>,
+    a: ({ href, children }) => {
+      const external = Boolean(href && /^https?:\/\//i.test(href));
+      return <a href={href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined}>{children}</a>;
+    },
+    table: ({ children }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
+  };
+
   return (
     <article className="markdown-report">
-      {blocks.map((block, index) => {
-        const key = `${block.type}-${index}`;
-        if (block.type === "h1") return <h1 key={key} className="report-h1">{renderInline(block.text)}</h1>;
-        if (block.type === "h2") return <h2 key={key} className="report-h2">{renderInline(block.text)}</h2>;
-        if (block.type === "h3") return <h3 key={key} className="report-h3">{renderInline(block.text)}</h3>;
-        if (block.type === "ul") return <ul key={key}>{block.text.split("\n").map((li, j) => <li key={j}>{renderInline(li)}</li>)}</ul>;
-        return <p key={key}>{renderInline(block.text)}</p>;
-      })}
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkStripDiagram]} components={components} skipHtml>
+        {stripDiagramBlocks(markdown)}
+      </ReactMarkdown>
     </article>
   );
 }

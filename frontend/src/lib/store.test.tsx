@@ -83,7 +83,8 @@ describe("local frontend state", () => {
       version: 1,
       updatedAt: "2026-08-02T10:00:02.000Z",
       nodes: [],
-      revisions: [],
+      currentVersionId: "version-1",
+      versions: [],
     }];
 
     const next = appReducer(state, {

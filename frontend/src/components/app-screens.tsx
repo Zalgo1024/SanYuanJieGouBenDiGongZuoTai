@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, ChevronRight, Download, FileText, FolderKanban, MessageSquarePlus, Network, Search, Trash2, Upload, X } from "lucide-react";
+import { ArrowRight, ChevronRight, FileText, FolderKanban, Network, Search, Trash2, Upload } from "lucide-react";
 import React, { useRef, useState } from "react";
-import { analysisTypes, phaseLabels, type AnalysisType, type ProjectStatus, type Report, type TaskStatus } from "@/lib/domain";
+import { analysisTypes, phaseLabels, type AnalysisType, type ProjectStatus, type TaskStatus } from "@/lib/domain";
 import { useAppStore } from "@/lib/store";
 import { apiRequest } from "@/lib/api";
 import { filterProjects, filterReports } from "@/lib/view-models";
 import { AnalysisNetwork } from "@/components/analysis-network";
+import { ReportReader } from "@/components/report-reader";
 
 const projectStatus: Record<ProjectStatus, { label: string; tone: "running" | "warning" | "verified" }> = {
   active: { label: "分析中", tone: "running" },
@@ -28,10 +29,6 @@ function formatDate(value: string) {
 
 function typeLabel(type: string) {
   return analysisTypes.find((item) => item.id === type)?.label ?? "结构分析";
-}
-
-function escapeHtml(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function Status({ children, tone = "running" }: { children: React.ReactNode; tone?: "running" | "warning" | "verified" }) {
@@ -139,45 +136,12 @@ export function ReportsScreen() {
   return <><PageHeading eyebrow="输出与沉淀" title="报告" action={<Link className="primary-button" href="/analysis">从分析新建 <ArrowRight size={16} /></Link>}>这里展示后端已经生成的报告当前版本，并保留阅读、修订和结构拆解入口。</PageHeading>{state.reports.length ? <><div className="list-toolbar"><label className="toolbar-search"><Search size={15} /><input aria-label="搜索报告" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索报告" /></label><select aria-label="报告类型" value={type} onChange={(event) => setType(event.target.value as "all" | AnalysisType)}><option value="all">全部类型</option>{analysisTypes.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="报告排序" value={sort} onChange={(event) => setSort(event.target.value as "updated-desc" | "updated-asc")}><option value="updated-desc">最近更新</option><option value="updated-asc">最早更新</option></select><button type="button" className="selection-action" onClick={toggleAll} disabled={!reports.length}>{allSelected ? "取消全选" : "全选结果"}</button><button type="button" className="selection-action selection-action--danger" onClick={() => void removeSelected()} disabled={!selectedIds.length || deleting}><Trash2 size={14} />{deleting ? "删除中" : `删除 ${selectedIds.length || ""}`}</button><span>显示 {reports.length} / {state.reports.length}</span></div>{deleteError && <p className="form-error" role="alert">{deleteError}</p>}{reports.length ? <section className="report-catalog">{reports.map((report, index) => <article className={index === 0 ? "report-catalog__lead" : "report-catalog__item"} key={report.id}><label className="report-select"><input type="checkbox" checked={selectedIds.includes(report.id)} onChange={() => toggle(report.id)} aria-label={`选择报告 ${report.title}`} /><span>选择</span></label><span className="eyebrow">{index === 0 ? "最近更新" : "分析成果"} · v{report.version}</span><h2>{report.title}</h2><p>{typeLabel(report.type)} · 后端当前版本 · {formatDate(report.updatedAt)}</p><div><Link href={`/reports/${report.id}`} className="table-icon" aria-label={`阅读 ${report.title}`}><ChevronRight size={18} /></Link><Link href={`/interest-analysis/${report.id}`} className="table-icon" aria-label={`拆解 ${report.title}`}><Network size={17} /></Link></div></article>)}</section> : <p className="filtered-empty">没有符合当前条件的报告。</p>}</> : <EmptyState eyebrow="暂无报告" title="还没有生成报告" detail="从新建分析开始，任务完成后会自动生成结构化报告。" />}</>;
 }
 
-function markdownSections(report: Report) {
-  return report.markdown.split(/^## /m).slice(1).map((part, index) => {
-    const [heading, ...body] = part.trim().split("\n");
-    return { id: `section-${index + 1}`, heading, body: body.filter(Boolean).map((line) => line.replace(/^[-*] /, "")) };
-  });
-}
-
-function ReportConversationLauncher({ report }: { report: Report }) {
-  const [open, setOpen] = useState(false);
-  const [purpose, setPurpose] = useState("continue");
-  const purposes = [
-    { id: "continue", label: "继续分析", detail: "围绕报告中的关键矛盾继续推进研判。" },
-    { id: "evidence", label: "补充证据", detail: "为现有结论补充可复核的材料与出处。" },
-    { id: "review", label: "审阅结论", detail: "检查推断边界、反例与仍待验证的问题。" },
-    { id: "rewrite", label: "重组表达", detail: "在保留证据边界的前提下重写报告表达。" },
-  ];
-  const selected = purposes.find((item) => item.id === purpose) ?? purposes[0];
-  return <><button className="secondary-button report-new-conversation" type="button" onClick={() => setOpen(true)}><MessageSquarePlus size={16} />新建对话</button>{open && <div className="report-conversation-backdrop" role="presentation" onMouseDown={() => setOpen(false)}><section className="report-conversation-dialog" role="dialog" aria-modal="true" aria-labelledby="report-conversation-title" onMouseDown={(event) => event.stopPropagation()}><header><div><span className="eyebrow">关联报告</span><h2 id="report-conversation-title">从报告继续一段新对话</h2></div><button className="table-icon" type="button" onClick={() => setOpen(false)} aria-label="关闭新建对话"><X size={18} /></button></header><p>新对话会预先带入当前报告的上下文，不会改写现有版本。</p><label><span>对话用途</span><select aria-label="对话用途" value={purpose} onChange={(event) => setPurpose(event.target.value)}>{purposes.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label><div className="report-conversation-choice"><strong>{selected.label}</strong><span>{selected.detail}</span></div><footer><button className="secondary-button" type="button" onClick={() => setOpen(false)}>取消</button><Link className="primary-button" href={`/analysis?reportId=${report.id}&purpose=${purpose}`} onClick={() => setOpen(false)}>进入新对话 <ArrowRight size={16} /></Link></footer></section></div>}</>;
-}
-
 export function ReportReaderScreen({ reportId }: { reportId: string }) {
-  const { state, hydrated } = useAppStore();
+  const { state, hydrated, loadReport } = useAppStore();
   const report = state.reports.find((item) => item.id === reportId);
   if (!report) return hydrated ? <EmptyState eyebrow="未找到报告" title="这个报告不存在" detail="返回报告列表，或从分析任务生成一份新的报告。" href="/reports" action="返回报告" /> : null;
-  const resolvedReport = report;
   const task = state.tasks.find((item) => item.id === report.taskId);
-  const sections = markdownSections(report);
-  function download() {
-    const isHtml = state.settings.defaultExport === "html";
-    const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtml(resolvedReport.title)}</title></head><body><pre style="white-space:pre-wrap;font:16px/1.8 system-ui">${escapeHtml(resolvedReport.markdown)}</pre></body></html>`;
-    const blob = new Blob([isHtml ? html : resolvedReport.markdown], { type: isHtml ? "text/html;charset=utf-8" : "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${resolvedReport.title}.${isHtml ? "html" : "md"}`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
-  return <section className="report-reader"><header className="report-reader__top"><div><span className="eyebrow">报告 / {typeLabel(report.type)} / v{report.version}</span><h1>{report.title}</h1><p>{task ? `来自"${task.title}"，关联 ${task.materialIds.length} 份材料，可继续审阅和修订。` : "后端当前结构化报告版本。"}</p></div><div><ReportConversationLauncher report={report} /><Link href={`/reports/${report.id}/edit`} className="secondary-button">编辑版本</Link><button className="primary-button" type="button" onClick={download}><Download size={16} />导出</button></div></header><div className="report-reader__layout"><aside className="report-outline"><span className="eyebrow">目录</span>{sections.map((section, index) => <a href={`#${section.id}`} key={section.id}>{String(index + 1).padStart(2, "0")} {section.heading}</a>)}</aside><article className="report-document">{sections.map((section, index) => <section id={section.id} key={section.id}><span className="eyebrow">{section.heading} · 后端当前版本</span><h2>{(section.body[0] ?? section.heading).replace(/\*\*/g, "")}</h2>{section.body.slice(1).map((line, lineIndex) => <p key={`${lineIndex}-${line}`}>{line.replace(/\*\*/g, "")}</p>)}{index === 1 && <div className="inline-network"><Network size={20} /><strong>查看结构关系拆解</strong><Link href={`/interest-analysis/${report.id}`}>进入利益拆解 <ArrowRight size={15} /></Link></div>}</section>)}</article><aside className="report-trace"><span className="eyebrow">版本状态</span><strong>v{report.version}</strong><p>{task ? `后端任务进度 ${task.progress}%` : "后端当前报告版本"}</p><div><span>{task?.engine === "llm" ? "语言模型" : task ? "规则引擎" : "历史任务"}</span><span>{formatDate(report.updatedAt)}</span></div>{task && <Link href={`/analysis/${task.id}`} className="text-action">返回分析任务 <ArrowRight size={15} /></Link>}</aside></div></section>;
+  return <ReportReader report={report} task={task} onReload={() => loadReport(report.taskId)} />;
 }
 
 export function InterestIndexScreen() {

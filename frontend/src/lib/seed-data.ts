@@ -47,9 +47,20 @@ export function createReportDraft(task: AnalysisTask, id: string, updatedAt: str
     title: `${task.title}分析报告`,
     markdown: `# ${task.title}\n\n## 核心诊断\n\n${copy.diagnosis}\n\n## 三元结构观察\n\n- **主体**：识别拥有行动能力、承担后果或影响解释框架的关键参与者。\n- **利益**：区分公开诉求、实际约束和不可让渡的底线。\n- **关系**：检查依赖、冲突、信任与信息传递如何塑造行动空间。\n\n## 建议\n\n围绕${copy.label}的关键矛盾建立可验证的行动清单，并在每次状态变化后更新证据与判断。`,
     version: 1,
+    currentVersionId: `${id}-v1`,
     updatedAt,
     nodes: reportNodes[task.type],
-    revisions: [],
+    versions: [{
+      id: `${id}-v1`,
+      version: 1,
+      kind: "original",
+      editedBy: "ai",
+      summary: "演示报告初始版本",
+      note: "",
+      editor: "",
+      createdAt: updatedAt,
+      isCurrent: true,
+    }],
   };
 }
 

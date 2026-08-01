@@ -73,15 +73,22 @@ export interface Report {
   title: string;
   markdown: string;
   version: number;
+  currentVersionId: string;
   updatedAt: string;
   nodes: InterestNode[];
-  revisions: ReportRevision[];
+  versions: ReportVersionSummary[];
 }
 
-export interface ReportRevision {
+export interface ReportVersionSummary {
+  id: string;
   version: number;
-  markdown: string;
-  updatedAt: string;
+  kind: "original" | "revised" | string;
+  editedBy: "ai" | "human" | string;
+  summary: string;
+  note: string;
+  editor: string;
+  createdAt: string;
+  isCurrent: boolean;
 }
 
 export interface MaterialRecord {

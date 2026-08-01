@@ -50,6 +50,11 @@ describe("fetchCurrentReport", () => {
       title: "后端报告标题",
       markdown: "# 后端当前版本\n\n## 结论\n\n真实内容",
       version: 2,
+      currentVersionId: "version-2",
+      versions: [
+        { id: "version-1", version: 1, isCurrent: false },
+        { id: "version-2", version: 2, isCurrent: true },
+      ],
       updatedAt: "2026-08-01T11:00:00",
     });
     expect(request).toHaveBeenCalledWith("/api/reports/task-1/versions/version-2");
@@ -88,7 +93,7 @@ describe("fetchWorkspaceSnapshot", () => {
     expect(snapshot.reports).toEqual([]);
   });
 
-  it("fails the snapshot when a completed task report cannot be read", async () => {
+  it("keeps the workspace usable when one completed report cannot be read", async () => {
     const request = vi.fn(async (path: string) => {
       if (path === "/api/projects?include_archived=true" || path === "/api/materials") return [];
       if (path === "/api/tasks?status=done&limit=200") return [{ task_id: "task-1", title: "已完成", status: "done", analysis_type: "case", project_id: null, created_at: "2026-08-01T10:00:00" }];
@@ -98,6 +103,9 @@ describe("fetchWorkspaceSnapshot", () => {
       throw new Error(`unexpected path: ${path}`);
     });
 
-    await expect(fetchWorkspaceSnapshot(request)).rejects.toThrow("报告接口失败");
+    await expect(fetchWorkspaceSnapshot(request)).resolves.toMatchObject({
+      tasks: [expect.objectContaining({ id: "task-1", status: "done" })],
+      reports: [],
+    });
   });
 });

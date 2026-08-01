@@ -1,5 +1,6 @@
 import { apiRequest } from "./api";
 import type { AnalysisTask, AppState, MaterialRecord, Project, Report, TaskPhase, TaskStatus } from "./domain";
+import { fetchReportVersion, fetchReportVersions } from "./report-delivery";
 
 export type WorkspaceRequest = (path: string, options?: RequestInit) => Promise<unknown>;
 
@@ -38,27 +39,6 @@ interface TaskPollDto {
   progress_pct?: number;
   material_ids?: string[];
   engine_used?: string | null;
-}
-
-interface ReportVersionMetaDto {
-  id: string;
-  version_no: number;
-  created_at: string | null;
-  is_current: boolean;
-}
-
-interface ReportVersionsDto {
-  task_id: string;
-  title: string;
-  current_version_id: string | null;
-  versions: ReportVersionMetaDto[];
-}
-
-interface ReportVersionDto {
-  id: string;
-  version_no: number;
-  created_at: string | null;
-  content_markdown: string;
 }
 
 const phases: TaskPhase[] = ["inspect", "search", "decompose", "network", "organize", "output"];
@@ -146,20 +126,21 @@ export async function fetchCurrentReport(
   task: AnalysisTask,
   request: WorkspaceRequest = apiRequest,
 ): Promise<Report | null> {
-  const index = await request(`/api/reports/${task.id}`) as ReportVersionsDto;
-  if (!index.current_version_id) return null;
-  const current = await request(`/api/reports/${task.id}/versions/${index.current_version_id}`) as ReportVersionDto;
-  if (!current.content_markdown) return null;
+  const index = await fetchReportVersions(task.id, request);
+  if (!index.currentVersionId) return null;
+  const current = await fetchReportVersion(task.id, index.currentVersionId, request);
+  if (!current.markdown) return null;
   return {
     id: task.id,
     taskId: task.id,
     type: task.type,
     title: index.title || task.title,
-    markdown: current.content_markdown,
-    version: current.version_no || 1,
-    updatedAt: current.created_at ?? task.updatedAt,
+    markdown: current.markdown,
+    version: current.version,
+    currentVersionId: index.currentVersionId,
+    updatedAt: current.createdAt || task.updatedAt,
     nodes: [],
-    revisions: [],
+    versions: index.versions,
   };
 }
 
@@ -176,7 +157,12 @@ export async function fetchWorkspaceSnapshot(
     const poll = await request(`/api/analyze/${item.task_id}/poll`) as TaskPollDto;
     return mapTask(item, poll);
   }));
-  const reportValues = await Promise.all(tasks.filter((task) => task.status === "done").map((task) => fetchCurrentReport(task, request)));
+  const reportResults = await Promise.allSettled(
+    tasks.filter((task) => task.status === "done").map((task) => fetchCurrentReport(task, request)),
+  );
+  const reportValues = reportResults
+    .filter((result): result is PromiseFulfilledResult<Report | null> => result.status === "fulfilled")
+    .map((result) => result.value);
   return {
     projects: asArray<ProjectDto>(projectValue).map((item) => mapProject(item, tasks)),
     tasks,
