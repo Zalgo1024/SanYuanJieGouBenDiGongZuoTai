@@ -23,16 +23,6 @@ backend/.venv/
 backend/venv/
 backend/runtime/
 
-# ----- Next.js frontend（依赖与构建产物，不入库） -----
-frontend/node_modules/
-frontend/.npm-cache/
-frontend/.next/
-frontend/.next_bak*/
-frontend/out/
-frontend/coverage/
-frontend/.env*.local
-frontend/tsconfig.tsbuildinfo
-
 # ----- 清理暂存区（重复/废弃报告的临时回收区，可恢复，不入库） -----
 .trash_local/
 

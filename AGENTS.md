@@ -2,12 +2,12 @@
 
 ## 项目定位
 
-三元结构理论社会事件/政策/组织/舆情结构化分析系统——**完整自包含项目**（内核渲染层 + Web 应用层同仓）：
+三元结构理论社会事件/政策/组织/舆情结构化分析系统——**完整自包含项目**（内核渲染层 + 后端 API 层同仓；前端已整体移除，待重建）：
 
 - **用户工作流**：丢关键词/链接 → AI 智能体读取本项目方法论 → **自动写完整报告 + 利益关系网络** → 内核排版 Word/PDF/交互式 HTML → 报告展览页（可下载/可编辑/版本留痕）。用户全程不手写成稿。
-- **两条使用路径**：
-  1. **Web（推荐）**：双击 `start.bat` → 浏览器 `http://127.0.0.1:3000/dashboard`，网页上丢关键词/链接自动生成报告。
-  2. **命令行内核**：`cases/run_*.py` 脚本 + `engine.export_from_text()` 直出报告（早期工作流，仍可用）。
+- **当前使用路径**：
+  1. **命令行内核**：`cases/run_*.py` 脚本 + `engine.export_from_text()` 直出报告。
+  2. **后端 API**：`start.bat` 启动 FastAPI 服务（127.0.0.1:8000，含交互文档 /docs），前端移除后可经 API 重新接界面。
 
 **核心方法论**：三元结构理论（生存—繁衍—逆反—利益四维框架）
 **覆盖四类分析**：政策分析（8段式）、事件/案例分析（5段式 / 深度8段式）、组织诊断（9段式）、舆情分析（7段式）＋组合（源序）
@@ -19,11 +19,11 @@
 ## 项目架构
 
 ```
-project_root/（本仓库 = 内核 + Web 应用 完整项目）
+project_root/（本仓库 = 内核 + 后端 API 完整项目；前端已移除）
 │
-├── start.bat                    ← 一键启动（后端 8000 + 前端 3000，绑 127.0.0.1）
+├── start.bat                    ← 一键启动后端（FastAPI 8000，绑 127.0.0.1）
 │
-├── backend/                     ← Web 应用后端（FastAPI，5244 行级）
+├── backend/                     ← 后端 API（FastAPI，5244 行级）
 │   ├── app/
 │   │   ├── main.py              ← FastAPI 装配（CORS/启动/任务恢复）
 │   │   ├── settings.py          ← ENGINE_DIR 默认指向本项目根（内核同仓）
@@ -38,11 +38,6 @@ project_root/（本仓库 = 内核 + Web 应用 完整项目）
 │   │   └── routers/             ← analyze/tasks/search/cases/reports/…
 │   └── tests/                   ← 67 个后端测试
 │
-├── frontend/                    ← Web 应用前端（Next.js 14 + React 18，源码在本仓库）
-│   ├── app/                     ← 页面（dashboard/analysis/report/cases/…）
-│   ├── components/              ← AnalysisEngine/NetworkCanvas(三态图)/VersionTimeline/RulesPanel
-│   └── lib/                     ← api.ts / network.ts / rules.ts（13 条写作铁律）
-│
 ├── engine.py                    ← 内核引擎（编排流程，唯一出口 export_from_text）
 ├── parser.py                    ← Markdown → 结构化数据（章节自动路由）
 ├── docx_renderer.py             ← Word 渲染器
@@ -53,7 +48,7 @@ project_root/（本仓库 = 内核 + Web 应用 完整项目）
 ├── cases/                       ← 命令行案例脚本（run_*.py，12 篇真实案例）
 ├── tests/                       ← 内核测试（章节编号等）
 ├── reports/                     ← 内核命令行产物（不入库）
-├── _archived/                   ← 历史孤儿归档（旧 backend 适配器/旧 frontend 快照，不入库）
+├── _archived/                   ← 历史孤儿归档（旧 backend 适配器留档，不入库；旧 frontend 快照已随前端清理一并移除）
 └── AGENTS.md                    ← 本文件（工作手册）
 ```
 
@@ -64,18 +59,16 @@ project_root/（本仓库 = 内核 + Web 应用 完整项目）
 
 ---
 
-## 一键启动（Web）
+## 一键启动（后端 API）
 
 ```
 双击 start.bat
 ```
-- 后端 FastAPI :8000（绑 127.0.0.1，优先用 `backend/.venv`；缺失则回退系统 python）
-- 前端 Next.js :3000（`frontend` 需先 `npm install`；自动打开 `http://127.0.0.1:3000/dashboard`）
+- 后端 FastAPI :8000（绑 127.0.0.1，优先用 `backend/.venv`；缺失则回退系统 python），启动后自动打开 `http://127.0.0.1:8000/docs`
+- 前端已移除（2026-08-01 清理），后续重建前端时再补充启动方式
 - 数据全本机：SQLite `backend/data/app.db` + 产物 `backend/generated/`（不入库）
 - LLM/搜索密钥：仅存 `backend/.env` 或 `backend/data/llm_settings.json`，绝不提交
-- 手动启动（不双击）：
-  - 后端：`cd backend && .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000`
-  - 前端：`cd frontend && node_modules\.bin\next start -p 3000`（先 `next build`）
+- 手动启动（不双击）：`cd backend && .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000`
 
 ## 已有案例清单
 

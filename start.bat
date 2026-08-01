@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title TSAP Launcher
+title TSAP Backend Launcher
 
 REM ---------------------------------------------------------------------------
 REM Neutralize WorkBuddy sandbox safe-delete barrier.
@@ -14,7 +14,7 @@ set GENIE_TRASH_DIR=%~dp0.genie-trash-disabled
 cd /d "%~dp0"
 
 REM ---------------------------------------------------------------------------
-REM Resolve interpreters: prefer project venv (backend\.venv), then system PATH
+REM Resolve Python interpreter: prefer project venv (backend\.venv), then system
 REM ---------------------------------------------------------------------------
 if exist "%~dp0backend\.venv\Scripts\python.exe" (
   set "PY=%~dp0backend\.venv\Scripts\python.exe"
@@ -23,18 +23,13 @@ if exist "%~dp0backend\.venv\Scripts\python.exe" (
   if not exist "%PY%" set "PY=E:\Python\python.exe"
 )
 
-where node >nul 2>&1 && set "NODE=node" || set "NODE=D:\New Folder\node.exe"
-if not exist "%NODE%" set "NODE=D:\New Folder\node.exe"
-
 echo [launcher] Python = %PY%
-echo [launcher] Node   = %NODE%
 echo.
 
 REM ---------------------------------------------------------------------------
-REM Port checks (informational only - will not block startup)
+REM Port check (informational only - will not block startup)
 REM ---------------------------------------------------------------------------
 netstat -ano 2>nul | findstr /C:":8000 " | findstr "LISTEN" >nul && echo [note] port 8000 in use, backend may already be running. || echo [OK] port 8000 free
-netstat -ano 2>nul | findstr /C:":3000 " | findstr "LISTEN" >nul && echo [note] port 3000 in use, frontend may already be running. || echo [OK] port 3000 free
 echo.
 
 REM ---------------------------------------------------------------------------
@@ -42,21 +37,15 @@ REM Start backend in its own window (close that window to stop the backend)
 REM ---------------------------------------------------------------------------
 start "TSAP-Backend" /D "%~dp0backend" "%PY%" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
-REM ---------------------------------------------------------------------------
-REM Start frontend (Next.js dev) in its own window
-REM ---------------------------------------------------------------------------
-start "TSAP-Frontend" /D "%~dp0frontend" "%NODE%" node_modules/next/dist/bin/next dev -p 3000
-
-echo Services are starting...
-echo   Backend : http://127.0.0.1:8000
-echo   Frontend: http://127.0.0.1:3000/dashboard
+echo Backend is starting...
+echo   API 服务 : http://127.0.0.1:8000
+echo   交互文档 : http://127.0.0.1:8000/docs
 echo.
-echo The browser will open automatically in a few seconds.
-echo To stop the services, simply close the "TSAP-Backend" and "TSAP-Frontend" windows.
+echo To stop the service, close the "TSAP-Backend" window.
 echo.
 
-timeout /t 10 /nobreak >nul
-start "" http://127.0.0.1:3000/dashboard
+timeout /t 5 /nobreak >nul
+start "" http://127.0.0.1:8000/docs
 
-echo Launcher finished. You can close this window; the services keep running in the background.
+echo Launcher finished. You can close this window; the service keeps running in the background.
 pause

@@ -1,8 +1,0 @@
-{
-  "/projects/[id]/page": "app/projects/[id]/page.js",
-  "/dashboard/page": "app/dashboard/page.js",
-  "/projects/page": "app/projects/page.js",
-  "/multi-subject/page": "app/multi-subject/page.js",
-  "/analysis/page": "app/analysis/page.js",
-  "/login/page": "app/login/page.js"
-}
