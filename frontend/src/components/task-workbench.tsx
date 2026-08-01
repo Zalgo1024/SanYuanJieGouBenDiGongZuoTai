@@ -59,6 +59,7 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
   const currentPhaseIndex = Math.max(0, phaseLabels.findIndex((phase) => phase.id === task.phase));
   const currentPhase = phaseLabels[currentPhaseIndex];
   const linkedReport = state.reports.find((report) => report.taskId === task.id);
+  const linkedMaterials = state.materials.filter((material) => task.materialIds.includes(material.id));
   const running = task.status === "queued" || task.status === "generating";
   const statusText = task.status === "done"
     ? linkedReport ? "任务已完成，后端当前报告版本已同步。" : "任务已完成，正在同步后端当前报告版本。"
@@ -143,7 +144,7 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
           </div>
         )
       )}
-      {view === "network" && <AnalysisNetwork taskId={task.id} markdown={linkedReport?.markdown} />}
+      {view === "network" && <AnalysisNetwork taskId={task.id} markdown={linkedReport?.markdown} materials={linkedMaterials} />}
     </section>
   );
 }

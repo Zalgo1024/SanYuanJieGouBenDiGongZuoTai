@@ -192,9 +192,11 @@ export function InterestAnalysisScreen({ reportId }: { reportId: string }) {
   const { state, hydrated } = useAppStore();
   const report = state.reports.find((item) => item.id === reportId);
   if (!report) return hydrated ? <EmptyState eyebrow="未找到关系网络" title="无法打开利益拆解" detail="请先从分析任务生成报告，再进入对应的关系网络。" href="/reports" action="返回报告" /> : null;
+  const task = state.tasks.find((item) => item.id === report.taskId);
+  const materials = state.materials.filter((material) => task?.materialIds.includes(material.id));
   return <>
     <PageHeading eyebrow={`报告视图 / ${typeLabel(report.type)}`} title="利益拆解">把"{report.title}"切换为结构化的主体、利益与关系拆解。</PageHeading>
-    <AnalysisNetwork taskId={report.taskId} markdown={report.markdown} />
+    <AnalysisNetwork taskId={report.taskId} markdown={report.markdown} materials={materials} />
   </>;
 }
 
