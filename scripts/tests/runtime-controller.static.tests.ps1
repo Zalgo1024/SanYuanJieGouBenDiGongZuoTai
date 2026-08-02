@@ -30,6 +30,10 @@ $requiredPatterns = @(
     'Restore-FrontendBuild',
     'Restarting previous frontend after build switch failure',
     'tsconfigSnapshot',
+    'tsconfigTimestamp',
+    'SetLastWriteTimeUtc',
+    '--prefix',
+    'ScriptStackTrace',
     'startedBackend',
     'startedFrontend',
     'ConvertTo-Json',
@@ -39,6 +43,18 @@ $requiredPatterns = @(
 foreach ($pattern in $requiredPatterns) {
     if ($content -notmatch $pattern) {
         throw "controller contract missing pattern: $pattern"
+    }
+}
+
+$forbiddenPatterns = @(
+    'Push-Location',
+    'Pop-Location',
+    '-WorkingDirectory'
+)
+
+foreach ($pattern in $forbiddenPatterns) {
+    if ($content -match $pattern) {
+        throw "controller must not depend on changing the process working directory: $pattern"
     }
 }
 

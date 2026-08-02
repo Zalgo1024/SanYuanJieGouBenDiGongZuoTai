@@ -152,16 +152,16 @@ function Invoke-FrontendBuild {
     $targetBuildDir = Join-Path $frontendDir $DistDir
     $tsconfigPath = Join-Path $frontendDir "tsconfig.json"
     $tsconfigSnapshot = [System.IO.File]::ReadAllBytes($tsconfigPath)
+    $tsconfigTimestamp = (Get-Item -LiteralPath $tsconfigPath).LastWriteTimeUtc
     if ($DistDir -ne ".next") { Remove-SafeBuildDirectory -Path $targetBuildDir }
-    Push-Location $frontendDir
     try {
-        & $NpmPath run build 2>&1 | Tee-Object -FilePath (Join-Path $runtimeDir "frontend-build.log")
+        & $NpmPath --prefix $frontendDir run build 2>&1 | Tee-Object -FilePath (Join-Path $runtimeDir "frontend-build.log")
         if ($LASTEXITCODE -ne 0) { throw "Frontend production build failed. See .runtime\frontend-build.log" }
         if (-not (Test-Path -LiteralPath (Join-Path $targetBuildDir "BUILD_ID") -PathType Leaf)) { throw "Frontend build completed without BUILD_ID." }
     }
     finally {
-        Pop-Location
         [System.IO.File]::WriteAllBytes($tsconfigPath, $tsconfigSnapshot)
+        [System.IO.File]::SetLastWriteTimeUtc($tsconfigPath, $tsconfigTimestamp)
         $env:NEXT_PUBLIC_API_URL = $previousApiUrl
         $env:NEXT_DIST_DIR = $previousDistDir
     }
@@ -207,7 +207,6 @@ function Start-BackendService {
     try {
         $process = Start-Process -FilePath $PythonPath `
             -ArgumentList @("-m", "uvicorn", "app.main:app", "--app-dir", "`"$backendDir`"", "--host", "127.0.0.1", "--port", [string]$backendPort) `
-            -WorkingDirectory $backendDir `
             -WindowStyle Hidden `
             -RedirectStandardOutput $backendLog `
             -RedirectStandardError $backendErrorLog `
@@ -228,8 +227,7 @@ function Start-FrontendService {
     $env:NEXT_PUBLIC_API_URL = "http://127.0.0.1:8000"
     try {
         $process = Start-Process -FilePath $NodePath `
-            -ArgumentList @("`"$nextEntry`"", "start", "-H", "127.0.0.1", "-p", [string]$frontendPort) `
-            -WorkingDirectory (Join-Path $workspaceRoot "frontend") `
+            -ArgumentList @("`"$nextEntry`"", "start", "`"$frontendDir`"", "-H", "127.0.0.1", "-p", [string]$frontendPort) `
             -WindowStyle Hidden `
             -RedirectStandardOutput $frontendLog `
             -RedirectStandardError $frontendErrorLog `
@@ -424,5 +422,8 @@ try {
 }
 catch {
     Write-Host "[workbench] ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    if (-not [string]::IsNullOrWhiteSpace($_.ScriptStackTrace)) {
+        Write-Host "[workbench] LOCATION: $($_.ScriptStackTrace)" -ForegroundColor DarkGray
+    }
     exit 1
 }

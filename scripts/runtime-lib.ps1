@@ -47,8 +47,11 @@ function Test-ServiceCommand {
 
     if ($ServiceName -eq "frontend") {
         $nextEntry = [regex]::Escape((Join-Path $WorkspaceRoot "frontend\node_modules\next\dist\bin\next"))
+        $frontendDir = [regex]::Escape((Join-Path $WorkspaceRoot "frontend"))
         $nodeExecutable = '(?:"[^"]*node(?:\.exe)?"|[^\s"]*node(?:\.exe)?)'
-        $nextPattern = '^\s*' + $nodeExecutable + '\s+["'']?' + $nextEntry + '["'']?\s+start(?:\s|$)'
+        $projectArgument = '(?:\s+["'']?' + $frontendDir + '["'']?)?'
+        $optionsOrEnd = '(?=\s+-|\s*$)'
+        $nextPattern = '^\s*' + $nodeExecutable + '\s+["'']?' + $nextEntry + '["'']?\s+start' + $projectArgument + $optionsOrEnd
         return [regex]::IsMatch($CommandLine, $nextPattern, 'IgnoreCase')
     }
 
