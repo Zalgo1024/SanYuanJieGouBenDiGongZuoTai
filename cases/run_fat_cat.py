@@ -36,12 +36,27 @@ BODY = r"""
 
 
 
-### 1. 胖猫——"我爱的不是她，我爱的是被爱的感觉"
+## 三、利益主体识别
+
+| 主体 | 在事件中的位置 | 核心诉求 |
+|---|---|---|
+| 胖猫（符号） | 事件中心，被叙事争夺的对象 | 真实死亡被五套叙事拆解 |
+| 谭竹（符号） | 被舆论审判的对象 | 证明恋爱关系的正常性 |
+| 国内互联网民众 | 叙事战场主体 | 借事件宣泄积压情绪，争夺定义权 |
+| 重庆市政府 | 制度回应方 | 用制度语言回应情绪化舆论 |
+| 越南互联网民众 | 跨文化传播主体 | 在本土语境中重演事件结构 |
+
+五方各自的利益框架互不重叠，共享的事实只有转账记录与聊天截图，每方各取一半证明自己的结论。
+
+## 四、三元结构分析正文
+
+### 1. 胖猫：我爱的不是她，我爱的是被爱的感觉
+
 胖猫1999元的大额转账记录，似乎指向一个被情感操控的受害者。但如果我们跳出道德判断，只看他的行为逻辑——他是理性的吗？
 他持续转账不是因为被PUA，而是因为不转账他就"没有资格"维持这段关系——而失去这段关系，他就没有任何关系了。转账是他的"关系续费"。
 → 胖猫不是被害者，他是一个用钱购买情感续费的孤独者。他的悲剧不是谭竹太贪婪，而是他的世界里只有这一种"被爱"的计价方式。
 
-### 2. 谭竹——"罪名先于事实"的舆论审判
+### 2. 谭竹：罪名先于事实的舆论审判
 谭竹在这场舆论风暴中是"捞女"的化身。但如果我们把她放在她的利益坐标系里看——
 事件爆发后，谭竹变成了一个符号——"捞女"的活体标本。她的个人行为被放大为整个性别群体的道德指控。这时她不再是谭竹，她是所有人心中"那种女人"的代表。
 → 谭竹有没有违法、有没有欺骗，已经不重要了——她在叙事战场上已经被判决。舆论审判不需要证据，只需要一个足够好的故事。
@@ -50,7 +65,7 @@ BODY = r"""
 ```
 
 
-### 3. 互联网民众——"我早就想说了，谢谢你胖猫"
+### 3. 互联网民众：我早就想说了，谢谢你胖猫
 胖猫事件在48小时内完成了"事实"到"符号"的转化。此后，胖猫不再是一个人，他是一个旗帜。
 更值得关注的是叙事战场的分裂方式：
 - "胖猫被捞女害死"叙事：聚焦转账金额、聊天记录中的冷淡回应、胖猫的付出与回报不对等。这套叙事的情感燃料是"老实人被欺负"的愤怒。
@@ -58,29 +73,29 @@ BODY = r"""
 两套叙事使用的是同一套证据——聊天记录、转账截图。区别只在于：各选一半来证明自己的结论。叙事战场的规则不是"谁找到了真相"，而是"谁的故事更符合公众的情绪需求"。
 → 互联网民众不是在讨论胖猫——他们是在借胖猫说出自己积压了十年的愤怒。胖猫只是一个引信，火药是性别对立。
 ```DIAGRAM
-{"viz": "network", "title": "国内互联网民众视角_叙事战场结构", "nodes": [{"id": "internet", "label": "互联网民众"}, {"id": "fatcat", "label": "胖猫(符号)"}, {"id": "tanzhu", "label": "谭竹(符号)"}, {"id": "narrative", "label": "叙事定义权"}, {"id": "gender", "label": "性别对立火药桶"}], "edges": [{"source": "internet", "target": "fatcat", "label": "同情投射"}, {"source": "internet", "target": "tanzhu", "label": "道德审判"}, {"source": "internet", "target": "narrative", "label": "争夺定义"}, {"source": "gender", "target": "internet", "label": "情绪供给"}, {"source": "fatcat", "target": "gender", "label": "引爆触发"}]}
+{"viz": "network", "title": "国内互联网民众视角：叙事战场结构", "nodes": [{"id": "internet", "label": "互联网民众"}, {"id": "fatcat", "label": "胖猫(符号)"}, {"id": "tanzhu", "label": "谭竹(符号)"}, {"id": "narrative", "label": "叙事定义权"}, {"id": "gender", "label": "性别对立火药桶"}], "edges": [{"source": "internet", "target": "fatcat", "label": "同情投射"}, {"source": "internet", "target": "tanzhu", "label": "道德审判"}, {"source": "internet", "target": "narrative", "label": "争夺定义"}, {"source": "gender", "target": "internet", "label": "情绪供给"}, {"source": "fatcat", "target": "gender", "label": "引爆触发"}]}
 ```
 
 
-### 4. 重庆市政府——"我们要的不是真相，是不可被推翻的通报"
+### 4. 重庆市政府：我们要的不是真相，是不可被推翻的通报
 事件发酵后，重庆市公安局承受着巨大的舆论压力。支持男方的人要求"立案调查谭竹"，支持女方的人要求"不要干预民事纠纷"。无论怎么回应，都会得罪一半的人。
 这就是叙事战场的第三个战场：官方叙事 vs 民间叙事。警方通报试图用法条语言说话（"无犯罪事实"），但公众在用道德语言理解（"她就是有罪"）。两套语言之间的翻译鸿沟，造成了通报"发了等于没发"的局面。
 → 重庆市政府不是在回应一个案件——它是在一个已经被叙事先行审判的事件中，试图为"制度结论"争取一席之地。但制度语言的节奏（慢、严谨、证据导向）永远追不上舆论语言的节奏（快、情绪化、立场优先）。
 ```DIAGRAM
-{"viz": "network", "title": "重庆市政府视角_三重叙事压力", "nodes": [{"id": "gov", "label": "重庆市政府"}, {"id": "internet", "label": "互联网舆论"}, {"id": "justice", "label": "司法程序"}, {"id": "tanzhu", "label": "谭竹(案件当事人)"}, {"id": "narrative", "label": "官方叙事公信力"}], "edges": [{"source": "internet", "target": "gov", "label": "舆论压力"}, {"source": "gov", "target": "justice", "label": "依法回应"}, {"source": "gov", "target": "narrative", "label": "维护公信"}, {"source": "gov", "target": "tanzhu", "label": "调查(不立案)"}]}
+{"viz": "network", "title": "重庆市政府视角：三重叙事压力", "nodes": [{"id": "gov", "label": "重庆市政府"}, {"id": "internet", "label": "互联网舆论"}, {"id": "justice", "label": "司法程序"}, {"id": "tanzhu", "label": "谭竹(案件当事人)"}, {"id": "narrative", "label": "官方叙事公信力"}], "edges": [{"source": "internet", "target": "gov", "label": "舆论压力"}, {"source": "gov", "target": "justice", "label": "依法回应"}, {"source": "gov", "target": "narrative", "label": "维护公信"}, {"source": "gov", "target": "tanzhu", "label": "调查(不立案)"}]}
 ```
 
 
-### 5. 越南互联网民众——"同样的事，换了个名字"
+### 5. 越南互联网民众：同样的事，换了个名字
 胖猫事件没有停留在中国互联网的边界内。越南的社交媒体上出现了大量"胖猫式"讨论，甚至有人翻墙搬运原帖内容。一个中国年轻人的个人悲剧，为什么会在越南引发共鸣？
 越南网民的参与不是"关注中国新闻"——他们是在自己的社会语境中重演胖猫事件。越南也有代练、也有异地恋、也有金钱纠纷、也有性别对立的暗流。胖猫事件只是给这些本地化的焦虑挂上了一张熟悉的面孔。
 → 胖猫事件在越南的走红，不是因为越南人关心一个中国代练的死活——而是因为他们在这个故事里看到了自己的影子。跨文化传播的不是事实，是情绪的共鸣结构。
 ```DIAGRAM
-{"viz": "network", "title": "海外_越南_视角_跨文化情绪传导", "nodes": [{"id": "overseas", "label": "海外(越南)民众"}, {"id": "fatcat", "label": "胖猫(原型符号)"}, {"id": "internet", "label": "国内互联网"}, {"id": "culture", "label": "文化相似性"}, {"id": "emotion", "label": "不公平感共鸣"}], "edges": [{"source": "internet", "target": "overseas", "label": "信息搬运"}, {"source": "overseas", "target": "fatcat", "label": "跨文化共情"}, {"source": "culture", "target": "overseas", "label": "提供相似语境"}, {"source": "emotion", "target": "overseas", "label": "情绪激活"}, {"source": "fatcat", "target": "emotion", "label": "触发共鸣"}, {"source": "overseas", "target": "internet", "label": "反向影响"}]}
+{"viz": "network", "title": "海外越南视角：跨文化情绪传导", "nodes": [{"id": "overseas", "label": "海外(越南)民众"}, {"id": "fatcat", "label": "胖猫(原型符号)"}, {"id": "internet", "label": "国内互联网"}, {"id": "culture", "label": "文化相似性"}, {"id": "emotion", "label": "不公平感共鸣"}], "edges": [{"source": "internet", "target": "overseas", "label": "信息搬运"}, {"source": "overseas", "target": "fatcat", "label": "跨文化共情"}, {"source": "culture", "target": "overseas", "label": "提供相似语境"}, {"source": "emotion", "target": "overseas", "label": "情绪激活"}, {"source": "fatcat", "target": "emotion", "label": "触发共鸣"}, {"source": "overseas", "target": "internet", "label": "反向影响"}]}
 ```
 
 
-### 6. 五套叙事的并置——没有人说谎，但也没有人说出全部真相
+### 6. 五套叙事的并置：没有人说谎，但也没有人说出全部真相
 当五套叙事并排放置：
 - 胖猫：我用钱买被爱的感觉
 - 谭竹：我在谈一场正常的恋爱
@@ -89,22 +104,22 @@ BODY = r"""
 - 越南民众：这是我们自己的故事换了个名字
 它们之间没有共享事实。 不是信息不对称——是每套叙事只选择与自己利益框架一致的事实。胖猫事件不是一起"发现了真相"的事件，而是一起"真相被五马分尸"的事件。
 
-## 三、结论
+## 五、结论
 汇流段：胖猫事件不是一场关于"谁对谁错"的辩论。它是一个孤独者的死亡被五个不同的利益坐标系同时翻译，翻译出五个互不相认的意义版本。每个人都在这个事件中寻找自己早已准备好的结论——胖猫的悲剧只是给了所有人一个说出来的机会。
 核心判断：胖猫事件的本质不是一个"真相需要查明"的案件，而是一个"意义被争夺"的战场。死者的真实痛苦在五套叙事的交叉火力中被彻底淹没——每个人都在谈论胖猫，但没有人真正关心胖猫。他变成了一个符号，而符号是不需要呼吸的。
 
-## 四、附录
+## 六、附录
 数据来源：
-- 重庆市公安局官方警情通报（2024年5月，全文）
-- 胖猫姐姐微博原文存档（2024年4月28日发布，含转账截图）
-- 凤凰网《风暴眼》栏目调查报道：《胖猫之死：一场被流量放大的悲剧》
-- 澎湃新闻事实核查：《胖猫事件时间线梳理》
-- 南方周末深度报道：《一个代练的死亡与互联网的审判》
-- 新京报评论：《当私人情感变成公共审判》
-- 越南 Zing News 编译报道：Vụ nam game thủ Trung Quốc nhảy cầu tự vẫn
-- 越南 VnExpress 讨论帖：Bài học từ câu chuyện 'Fat Cat'
-- 微博话题 #胖猫事件# 阅读量统计（2024年5月峰值达35亿）
-- 抖音数据分析报告：胖猫事件相关视频播放量趋势
+- [重庆市公安局官方警情通报（2024年5月）](http://www.cq.gov.cn)
+- [胖猫姐姐微博原文存档（2024年4月28日，含转账截图）](https://weibo.com)
+- [凤凰网《风暴眼》栏目调查报道：胖猫之死：一场被流量放大的悲剧](http://www.ifeng.com)
+- [澎湃新闻事实核查：胖猫事件时间线梳理](https://www.thepaper.cn)
+- [南方周末深度报道：一个代练的死亡与互联网的审判](http://www.infzm.com)
+- [新京报评论：当私人情感变成公共审判](https://www.bjnews.com.cn)
+- [越南 Zing News 编译报道：Vụ nam game thủ Trung Quốc nhảy cầu tự vẫn](https://zingnews.vn)
+- [越南 VnExpress 讨论帖：Bài học từ câu chuyện Fat Cat](https://vnexpress.net)
+- [微博话题 胖猫事件 阅读量统计（2024年5月峰值达35亿）](https://weibo.com)
+- [抖音数据分析报告：胖猫事件相关视频播放量趋势](https://www.douyin.com)
 不确定性声明：本案核心事实（两人关系中的具体互动细节）缺乏第三方全面验证。本分析基于公开可查事实进行结构性分析，不对事实层面的"真相"做推断。
 分析框架：三元结构理论 © 2026, CC BY-NC-SA 4.0，国作登字-2026-A-00048134
 r"""
@@ -115,14 +130,14 @@ if __name__ == "__main__":
 
     print("=" * 60)
     print("报告生成完成！")
-    print(f"📄 Word:  {result['word']}")
-    print(f"📕 PDF:   {result['pdf']}" if result['pdf'] else "📕 PDF:   未生成（请安装 LibreOffice 或 pandoc）")
-    print(f"📁 目录:   {result['folder']}")
+    print(f"  Word:  {result['word']}")
+    print(f"  PDF:   {result['pdf']}" if result['pdf'] else "  PDF:   未生成（请安装 LibreOffice 或 pandoc）")
+    print(f"  目录:  {result['folder']}")
     diagrams = result.get("diagrams", [])
     if diagrams:
-        print(f"📊 网络图 ({len(diagrams)} 张):")
+        print(f"  图表 ({len(diagrams)} 张):")
         for dd in diagrams:
             print(f"      {dd['title']}: {dd['png']}")
     else:
-        print("📊 网络图: 无")
+        print("  图表: 无")
     print("=" * 60)
