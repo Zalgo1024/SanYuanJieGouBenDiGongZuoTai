@@ -37,6 +37,7 @@ def list_tasks(
                 # 非法 status 不静默：返回空列表（前端不会因此崩溃）
                 return []
         rows = q.order_by(Task.created_at.desc()).limit(limit).all()
+        # 直接携带 phase/progress/engine 字段，消除前端"逐任务 poll"的 N+1 请求
         return [
             {
                 "task_id": t.id,
@@ -45,6 +46,13 @@ def list_tasks(
                 "analysis_type": t.analysis_type,
                 "project_id": t.project_id,
                 "created_at": t.created_at.isoformat() if t.created_at else None,
+                "phase": t.phase,
+                "progress_pct": t.progress_pct,
+                "engine_used": (t.result or {}).get("engine_used") if isinstance(t.result, dict) else None,
+                "material_ids": t.material_ids,
+                "error": t.error if t.status == "error" else None,
+                "error_phase": t.error_phase if t.status == "error" else None,
+                "quality": t.quality_result,
             }
             for t in rows
         ]

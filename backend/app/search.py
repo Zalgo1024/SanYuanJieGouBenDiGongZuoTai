@@ -75,8 +75,33 @@ def _safe_msg(e: Exception) -> str:
     return msg[:200]
 
 
+def _assert_safe_url(url: str) -> None:
+    """URL 白名单护栏：只允许 http/https，拒绝 file:// 等本地协议及本机回环地址，
+    防止用户白名单/搜索结果被利用读取本地文件或探测本机服务（SSRF）。"""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        raise ValueError(f"无法解析的 URL: {url[:80]}")
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"不允许的 URL 协议: {scheme or '(空)'}")
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError(f"URL 缺少主机名: {url[:80]}")
+    if host.lower() == "localhost":
+        raise ValueError("不允许访问本机回环地址")
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return  # 非 IP 字面量（域名），交给正常 HTTP 解析
+    if not ip.is_global:
+        raise ValueError("不允许访问本机、私有或链路本地地址")
+
+
 def _http_get(url: str, timeout: int = FETCH_TIMEOUT, headers: dict | None = None) -> str:
     """GET 一个 URL 返回文本。优先 requests（若已安装），否则 urllib 兜底。"""
+    _assert_safe_url(url)
     hdrs = {"User-Agent": BROWSER_UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
     if headers:
         hdrs.update(headers)
