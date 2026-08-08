@@ -1,7 +1,9 @@
 export type AnalysisType = "case" | "policy" | "org" | "opinion" | "combo";
-export type EngineMode = "rule" | "llm";
+export type EngineMode = "auto" | "rule" | "llm";
+export type InputMode = "freeform" | "structured";
 export type TaskStatus = "queued" | "generating" | "done" | "error";
 export type TaskPhase = "inspect" | "search" | "decompose" | "network" | "organize" | "output";
+export type TaskErrorPhase = TaskPhase | "input_validation" | "quality_gate";
 export type ProjectStatus = "active" | "review" | "archived";
 export type MaterialKind = "file" | "link" | "note";
 export type MaterialStatus = "pending" | "ready" | "error";
@@ -13,6 +15,7 @@ export interface NewAnalysisInput {
   title: string;
   context: string;
   engine: EngineMode;
+  inputMode: InputMode;
   materialIds: string[];
   projectId?: string;
   /** 是否开启联网检索撰写（映射到后端 /api/analyze 的 web 字段） */
@@ -52,8 +55,24 @@ export interface AnalysisTask {
   status: TaskStatus;
   phase: TaskPhase;
   progress: number;
+  error?: string;
+  errorPhase?: TaskErrorPhase;
+  quality?: ReportQualityResult;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface QualityIssue {
+  code: string;
+  severity: "error" | "warning";
+  message: string;
+  section?: string | null;
+}
+
+export interface ReportQualityResult {
+  valid: boolean;
+  score: number;
+  issues: QualityIssue[];
 }
 
 export interface InterestNode {
@@ -116,7 +135,7 @@ export interface AppState {
 }
 
 export const defaultSettings: WorkspaceSettings = {
-  defaultEngine: "rule",
+  defaultEngine: "auto",
   theme: "light",
   defaultExport: "markdown",
 };

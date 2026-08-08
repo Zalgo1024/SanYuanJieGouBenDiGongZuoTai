@@ -5,6 +5,7 @@ import React from "react";
 import { useAppStore } from "@/lib/store";
 import { apiRequest } from "@/lib/api";
 import type { MaterialRecord } from "@/lib/domain";
+import { createAnalysisTask } from "@/lib/workspace-api";
 import { AnalysisCreation } from "./analysis-creation";
 
 export function AnalysisPage() {
@@ -24,18 +25,7 @@ export function AnalysisPage() {
 
   async function create(input: Parameters<NonNullable<React.ComponentProps<typeof AnalysisCreation>["onCreate"]>>[0]) {
     // 分析skill 后端：POST /api/analyze 自动建任务并后台运行（无需 codex 的 research/run 分步）。
-    const result = await apiRequest<{ task_id: string }>("/api/analyze", {
-      method: "POST",
-      body: JSON.stringify({
-        title: input.title,
-        input_text: input.context,
-        analysis_type: input.type,
-        mode: input.engine,
-        project_id: input.projectId ?? null,
-        material_ids: input.materialIds,
-        web: Boolean(input.web),
-      }),
-    });
+    const result = await createAnalysisTask(input);
     window.location.assign(`/analysis/${result.task_id}?autorun=1`);
   }
 

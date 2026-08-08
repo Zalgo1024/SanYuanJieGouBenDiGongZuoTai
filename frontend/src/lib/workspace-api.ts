@@ -1,8 +1,27 @@
 import { apiRequest } from "./api";
-import type { AnalysisTask, AppState, MaterialRecord, Project, Report, TaskPhase, TaskStatus } from "./domain";
+import type { AnalysisTask, AppState, MaterialRecord, NewAnalysisInput, Project, Report, ReportQualityResult, TaskErrorPhase, TaskPhase, TaskStatus } from "./domain";
 import { fetchReportVersion, fetchReportVersions } from "./report-delivery";
 
 export type WorkspaceRequest = (path: string, options?: RequestInit) => Promise<unknown>;
+
+export async function createAnalysisTask(
+  input: NewAnalysisInput,
+  request: WorkspaceRequest = apiRequest,
+): Promise<{ task_id: string }> {
+  return await request("/api/analyze", {
+    method: "POST",
+    body: JSON.stringify({
+      title: input.title,
+      input_text: input.context,
+      analysis_type: input.type,
+      input_mode: input.inputMode,
+      requested_engine: input.engine,
+      project_id: input.projectId ?? null,
+      material_ids: input.materialIds,
+      web: Boolean(input.web),
+    }),
+  }) as { task_id: string };
+}
 
 interface ProjectDto {
   id: string;
@@ -31,6 +50,14 @@ interface TaskDto {
   analysis_type: string;
   project_id: string | null;
   created_at: string | null;
+  // 新后端直接携带进度字段（消除逐任务 poll 的 N+1）；旧后端/测试可能缺失
+  phase?: string | null;
+  progress_pct?: number | null;
+  engine_used?: string | null;
+  material_ids?: string[] | null;
+  error?: string | null;
+  error_phase?: string | null;
+  quality?: ReportQualityResult | null;
 }
 
 interface TaskPollDto {
@@ -39,6 +66,9 @@ interface TaskPollDto {
   progress_pct?: number;
   material_ids?: string[];
   engine_used?: string | null;
+  error?: string | null;
+  error_phase?: string | null;
+  quality?: ReportQualityResult | null;
 }
 
 const phases: TaskPhase[] = ["inspect", "search", "decompose", "network", "organize", "output"];
@@ -56,6 +86,11 @@ export function normalizeTaskPhase(value: string | undefined, status: TaskStatus
   if (value && phases.includes(value as TaskPhase)) return value as TaskPhase;
   if (value && phaseAliases[value]) return phaseAliases[value];
   return status === "done" ? "output" : "inspect";
+}
+
+function normalizeErrorPhase(value: string | null | undefined): TaskErrorPhase | undefined {
+  if (value === "input_validation" || value === "quality_gate") return value;
+  return value && phases.includes(value as TaskPhase) ? value as TaskPhase : undefined;
 }
 
 export function normalizeTaskStatus(value: string | undefined): TaskStatus {
@@ -99,6 +134,9 @@ function mapTask(item: TaskDto, poll: TaskPollDto): AnalysisTask {
     status,
     phase: normalizeTaskPhase(poll.phase, status),
     progress: status === "done" ? 100 : Math.max(0, Math.min(100, poll.progress_pct ?? 0)),
+    error: poll.error ?? item.error ?? undefined,
+    errorPhase: normalizeErrorPhase(poll.error_phase ?? item.error_phase),
+    quality: poll.quality ?? item.quality ?? undefined,
     createdAt: item.created_at ?? new Date(0).toISOString(),
     updatedAt: item.created_at ?? new Date(0).toISOString(),
   };
@@ -144,6 +182,23 @@ export async function fetchCurrentReport(
   };
 }
 
+async function taskProgress(item: TaskDto, request: WorkspaceRequest): Promise<TaskPollDto> {
+  // 优先用 DTO 内联字段；仅当缺失（旧后端/兼容场景）时才逐任务 poll
+  if (item.phase != null || item.status === "done") {
+    return {
+      status: item.status,
+      phase: item.phase ?? undefined,
+      progress_pct: item.progress_pct ?? 0,
+      engine_used: item.engine_used ?? undefined,
+      material_ids: item.material_ids ?? [],
+      error: item.error ?? undefined,
+      error_phase: item.error_phase ?? undefined,
+      quality: item.quality ?? undefined,
+    };
+  }
+  return await request(`/api/analyze/${item.task_id}/poll`) as TaskPollDto;
+}
+
 export async function fetchWorkspaceSnapshot(
   request: WorkspaceRequest = apiRequest,
 ): Promise<Pick<AppState, "projects" | "tasks" | "reports" | "materials">> {
@@ -154,7 +209,7 @@ export async function fetchWorkspaceSnapshot(
   ]);
   const taskDtos = asArray<TaskDto>(taskValue);
   const tasks = await Promise.all(taskDtos.map(async (item) => {
-    const poll = await request(`/api/analyze/${item.task_id}/poll`) as TaskPollDto;
+    const poll = await taskProgress(item, request);
     return mapTask(item, poll);
   }));
   const reportResults = await Promise.allSettled(
@@ -178,6 +233,6 @@ export async function fetchTaskById(
   const tasks = await fetchAllTaskDtos(request);
   const item = tasks.find((candidate) => candidate.task_id === taskId);
   if (!item) return null;
-  const poll = await request(`/api/analyze/${taskId}/poll`) as TaskPollDto;
+  const poll = await taskProgress(item, request);
   return mapTask(item, poll);
 }

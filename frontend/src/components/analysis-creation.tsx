@@ -4,7 +4,10 @@ import { ArrowRight, FileText, Globe2, Paperclip, Send, Sparkles, X } from "luci
 import React, { useRef, useState } from "react";
 import { analysisTypes, type AnalysisType, type EngineMode, type MaterialRecord, type NewAnalysisInput, type Project } from "@/lib/domain";
 
-const acceptedFileTypes = ".pdf,.docx,.pptx,.jpg,.jpeg,.png";
+// 与后端 backend/app/routers/materials.py parse_uploaded_file 支持的格式保持一致；
+// 图片/PPT 等二进制格式后端无法解析为文本，前端直接拒绝，避免入库乱码素材。
+const acceptedFileTypes = ".pdf,.docx,.txt,.md";
+const SUPPORTED_EXTENSIONS = ["pdf", "docx", "txt", "md"];
 
 interface AnalysisCreationProps {
   onCreate: (input: NewAnalysisInput) => void | Promise<void>;
@@ -20,7 +23,7 @@ interface AnalysisCreationProps {
 export function AnalysisCreation({
   onCreate,
   onUpload,
-  defaultEngine = "rule",
+  defaultEngine = "auto",
   initialType = "case",
   initialPrompt = "",
   reportTitle,
@@ -36,6 +39,12 @@ export function AnalysisCreation({
   async function upload(files: FileList | null) {
     if (!files?.length) return;
     const selected = Array.from(files);
+    // 双保险：绕过 input accept 拖入的文件也要按扩展名拦截（后端只支持文本类格式）
+    const unsupported = selected.find((file) => {
+      const ext = (file.name.split(".").pop() ?? "").toLowerCase();
+      return !SUPPORTED_EXTENSIONS.includes(ext);
+    });
+    if (unsupported) { setError(`"${unsupported.name}" 格式暂不支持，请上传 txt / md / docx / pdf 文件。`); return; }
     const oversized = selected.find((file) => file.size > 50 * 1024 * 1024);
     if (oversized) { setError(`"${oversized.name}"超过 50MB 限制。`); return; }
     if (!onUpload) { setError("材料上传功能暂不可用，请稍后重试。"); return; }
@@ -62,6 +71,7 @@ export function AnalysisCreation({
         title,
         context: input,
         engine: defaultEngine,
+        inputMode: "freeform",
         materialIds: attachments.map((item) => item.id),
         web: useWeb,
       });

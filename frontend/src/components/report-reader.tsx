@@ -4,8 +4,9 @@ import Link from "next/link";
 import { ArrowRight, Download, FileText, History, MessageSquarePlus, Network, RotateCcw, X } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import { analysisTypes, type AnalysisTask, type Report } from "@/lib/domain";
-import { extractReportOutline, MarkdownReport } from "@/lib/markdown";
+import { parseReportPresentation } from "@/lib/report-presentation";
 import { downloadReportArtifact, fetchReportVersion, rollbackReportVersion, type ReportArtifactKind } from "@/lib/report-delivery";
+import { ReportPresentation } from "./report-presentation";
 
 function formatDate(value: string) {
   const date = new Date(value);
@@ -76,7 +77,8 @@ export function ReportReader({ report, task, onReload }: { report: Report; task?
   const selectedVersion = versions.find((item) => item.id === selectedVersionId) ?? versions.find((item) => item.id === currentVersionId) ?? versions[versions.length - 1];
   const isCurrent = selectedVersionId === currentVersionId;
   const markdown = isCurrent ? report.markdown : historicalMarkdown;
-  const outline = extractReportOutline(markdown || report.markdown);
+  const renderedMarkdown = markdown || report.markdown;
+  const outline = parseReportPresentation(renderedMarkdown, report.title).sections.map((section) => ({ id: section.id, label: section.heading }));
 
   async function selectVersion(versionId: string) {
     const sequence = ++requestSequence.current;
@@ -141,7 +143,7 @@ export function ReportReader({ report, task, onReload }: { report: Report; task?
     {rollbackNotice && <p className="delivery-notice" role="status">{rollbackNotice}</p>}
     <div className="report-reader__layout">
       <aside className="report-outline"><span className="eyebrow">目录</span>{outline.map((section, index) => <a href={`#${section.id}`} key={section.id}>{String(index + 1).padStart(2, "0")} {section.label}</a>)}</aside>
-      <div className="report-document">{loadingVersion ? <div className="report-version-loading" aria-busy="true">正在读取历史版本...</div> : <MarkdownReport markdown={markdown || report.markdown} hideTitle />}{!loadingVersion && <div className="inline-network"><Network size={20} /><strong>查看结构关系与证据链</strong><Link href={`/interest-analysis/${report.id}`}>进入关系图谱 <ArrowRight size={15} /></Link></div>}</div>
+      <div className="report-document">{loadingVersion ? <div className="report-version-loading" aria-busy="true">正在读取历史版本...</div> : <ReportPresentation markdown={renderedMarkdown} fallbackTitle={report.title} mode="reader" relationHref={`/interest-analysis/${report.id}`} />}</div>
       <aside className="report-delivery-panel">
         <section><span className="eyebrow">版本记录</span><div className="version-list">{[...versions].sort((left, right) => right.version - left.version).map((version) => <button type="button" className={version.id === selectedVersionId ? "version-item version-item--active" : "version-item"} key={version.id} onClick={() => void selectVersion(version.id)} aria-label={`预览 v${version.version}${version.isCurrent ? "（当前版本）" : ""}`} aria-pressed={version.id === selectedVersionId}><span><strong>v{version.version}</strong>{version.isCurrent && <i>当前</i>}</span><small>{version.summary || (version.kind === "original" ? "初始生成" : version.kind === "revised" ? "人工修订" : "类型未知")}</small><time>{formatDate(version.createdAt)}</time></button>)}</div></section>
         {!isCurrent && historicalMarkdown && <section className="rollback-panel"><span className="eyebrow">版本操作</span>{confirmRollback ? <div className="rollback-confirm"><strong>回滚会把 v{selectedVersion?.version} 设为新的当前版本</strong><p>现有版本不会删除，关系图与下载将随当前版本刷新。</p><div><button className="secondary-button" type="button" onClick={() => setConfirmRollback(false)} disabled={rollingBack}>取消</button><button className="danger-button" type="button" onClick={() => void rollback()} disabled={rollingBack} aria-label={`确认回滚到 v${selectedVersion?.version}`}>{rollingBack ? "回滚中" : "确认回滚"}</button></div></div> : <button className="secondary-button rollback-trigger" type="button" onClick={() => setConfirmRollback(true)}><RotateCcw size={15} />回滚到此版本</button>}</section>}

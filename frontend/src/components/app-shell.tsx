@@ -3,12 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen,
   ChevronDown,
-  FileText,
-  FolderKanban,
   LayoutGrid,
-  Network,
   Plus,
   RefreshCw,
   Settings,
@@ -23,10 +19,6 @@ import { NavigationBackButton } from "./navigation-back-button";
 const navigation = [
   { href: "/dashboard", label: "工作台", icon: LayoutGrid },
   { href: "/analysis", label: "新建分析", icon: Plus },
-  { href: "/projects", label: "项目", icon: FolderKanban },
-  { href: "/materials", label: "材料库", icon: BookOpen },
-  { href: "/reports", label: "报告", icon: FileText },
-  { href: "/interest-analysis", label: "利益拆解", icon: Network },
   { href: "/settings", label: "设置", icon: Settings },
 ];
 
@@ -38,7 +30,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { state, connection, connectionError, refreshWorkspace } = useAppStore();
   const [profileOpen, setProfileOpen] = useState(false);
-  const engineLabel = state.settings.defaultEngine === "llm" ? "语言增强已就绪" : "规则引擎已就绪";
+  const engineLabel = state.settings.defaultEngine === "auto"
+    ? "自动路由已就绪"
+    : state.settings.defaultEngine === "llm"
+      ? "语言增强已就绪"
+      : "规则引擎已就绪";
 
   return (
     <main className="app-shell">
