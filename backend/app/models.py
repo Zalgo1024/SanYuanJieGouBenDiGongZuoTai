@@ -95,7 +95,9 @@ class Task(Base):
     attempt_no = Column(Integer, default=1)  # 第几次尝试（1=首次）
 
     # —— 生成模式（2.4 内置规则引擎 + 可选 LLM 插件）——
-    mode = Column(String(16), default="rule")  # rule(默认,离线) | llm(可选插件)
+    mode = Column(String(16), default="rule")  # 实际执行引擎：rule | llm
+    input_mode = Column(String(16), nullable=True)  # freeform | structured
+    requested_engine = Column(String(16), nullable=True)  # auto | rule | llm
     structured = Column(JSON, nullable=True)   # rule 模式：结构化输入
     llm_config = Column(JSON, nullable=True)    # llm 模式：每请求 {api_key,base_url,model}
 
@@ -137,6 +139,7 @@ class ReportVersion(Base):
     """
 
     __tablename__ = "report_versions"
+
 
     id = Column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
     task_id = Column(

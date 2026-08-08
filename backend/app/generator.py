@@ -80,7 +80,7 @@ class ReportGenerator:
         if mctx:
             extra.append(mctx)
         extra.append(
-            "引用约束：正文中引用任何素材事实时，必须以内联 Markdown 链接 [名称](url) 标注出处；"
+            "引用约束：正文事实条目仅写「（来源：名称）」；不要在正文堆叠 URL 或整段复述素材。"
             "报告末尾附录使用「[名称](url)」可点击格式，禁止裸 URL 或无链接媒体名。"
         )
         if src_appendix:
@@ -152,7 +152,7 @@ class ReportGenerator:
             reason = (
                 "未配置 LLM 密钥（请到设置页填写，或用 backend/.env 配置），已使用规则引擎"
             )
-            return self._degrade_to_rule(input_text, title, reason)
+            return self._fallback_or_raise(input_text, title, reason)
 
         system = build_system_prompt(self.analysis_type)
         user = self._build_user_prompt(input_text, title, self.materials)
@@ -161,7 +161,7 @@ class ReportGenerator:
         except Exception as e:  # noqa: BLE001
             # LLMError（限流/鉴权/余额/超时/连接）或任何调用异常 → 降级
             msg = getattr(e, "message", None) or str(e)
-            return self._degrade_to_rule(
+            return self._fallback_or_raise(
                 input_text, title, f"LLM 调用失败：{msg}"
             )
         md = self._normalize(raw, title)
@@ -173,7 +173,7 @@ class ReportGenerator:
         md, contract = validate_and_repair(md, self.analysis_type, si)
         if contract.get("degrade"):
             reason = "LLM 输出不符合契约（缺少可用利益关系图且必要章节缺失），已自动降级到规则引擎"
-            return self._degrade_to_rule(input_text, title, reason, raw=raw)
+            return self._fallback_or_raise(input_text, title, reason, raw=raw)
 
         # LLM 成功且契约可用
         contract["mode"] = "llm"
@@ -300,6 +300,16 @@ class ReportGenerator:
             "raw_response": _truncate(raw),
         }
         return md
+
+    def _fallback_or_raise(
+        self, input_text: str, title: str | None, reason: str, raw: str | None = None
+    ) -> str:
+        if self.structured is None:
+            raise ValueError(
+                "自由输入的 LLM 生成失败，且没有可供规则引擎接管的结构化数据："
+                + reason
+            )
+        return self._degrade_to_rule(input_text, title, reason, raw=raw)
 
     def extract_network(self, markdown: str) -> dict:
         """从已生成的 Markdown 中抽取「利益关系网络（DIAGRAM）」区块。

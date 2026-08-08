@@ -108,6 +108,10 @@ def init_db() -> None:
             alters.append("ALTER TABLE tasks ADD COLUMN phase VARCHAR(32)")
         if "progress_pct" not in cols:
             alters.append("ALTER TABLE tasks ADD COLUMN progress_pct INTEGER DEFAULT 0")
+        if "input_mode" not in cols:
+            alters.append("ALTER TABLE tasks ADD COLUMN input_mode VARCHAR(16)")
+        if "requested_engine" not in cols:
+            alters.append("ALTER TABLE tasks ADD COLUMN requested_engine VARCHAR(16)")
         # 阶段五：全网搜索（可选增强）
         if "search_enabled" not in cols:
             alters.append("ALTER TABLE tasks ADD COLUMN search_enabled BOOLEAN")
@@ -141,6 +145,24 @@ def init_db() -> None:
             conn.execute(text(sql))
         if alters:
             conn.commit()
+
+        # 2.6 迁移：report_versions (task_id, version_no) 唯一索引，
+        # 防止并发保存产生重复版本号（对已有库同样生效）。
+        # 先清理历史重复行（同任务同版本号仅保留最新一条），再建唯一索引。
+        conn.execute(text(
+            "DELETE FROM report_versions WHERE id IN ("
+            "  SELECT rv.id FROM report_versions rv"
+            "  JOIN report_versions rv2 ON rv.task_id = rv2.task_id"
+            "   AND rv.version_no = rv2.version_no"
+            "   AND (rv.created_at < rv2.created_at"
+            "        OR (rv.created_at = rv2.created_at AND rv.id < rv2.id))"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_versions_task_version "
+            "ON report_versions (task_id, version_no)"
+        ))
+        conn.commit()
 
 
 def seed_projects() -> None:

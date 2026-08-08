@@ -7,8 +7,11 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from app import rule_engine
 from app.generator import ReportGenerator
+from app.llm_client import MockClient
 
 FIX = Path(__file__).resolve().parent / "fixtures"
 
@@ -82,3 +85,33 @@ def test_generate_and_export_orchestrates_and_is_compatible(tmp_path):
     # 引擎导出契约字段
     assert isinstance(out.get("pdf_available"), bool)
     assert out.get("word") and os.path.exists(out["word"])
+
+
+def test_freeform_llm_failure_never_degrades_to_rule(monkeypatch):
+    monkeypatch.setattr(
+        "app.llm_client.create_llm_from_config", lambda _config=None: MockClient()
+    )
+    gen = ReportGenerator(None, analysis_type="case", mode="llm", structured=None)
+
+    with pytest.raises(ValueError, match="自由输入"):
+        gen.generate("分析这个事件", "自由输入报告")
+
+
+def test_structured_llm_failure_can_degrade_to_rule(monkeypatch):
+    sample = _load("sample_event")
+    structured = rule_engine.StructuredInput.model_validate(sample)
+    monkeypatch.setattr(
+        "app.llm_client.create_llm_from_config", lambda _config=None: MockClient()
+    )
+    gen = ReportGenerator(
+        None,
+        analysis_type="case",
+        mode="llm",
+        structured=structured,
+    )
+
+    markdown = gen.generate("", sample["title"])
+
+    assert markdown.startswith("# ")
+    assert gen.validate()["engine_used"] == "rule"
+    assert gen.validate()["degraded_from_llm"] is True

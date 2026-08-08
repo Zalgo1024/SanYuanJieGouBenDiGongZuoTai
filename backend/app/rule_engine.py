@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel
 
 COPYRIGHT = "分析框架：三元结构理论 © 2026, CC BY-NC-SA 4.0，国作登字-2026-A-00048134"
@@ -131,6 +133,11 @@ class StructuredInput(BaseModel):
     recommendations: list[Recommendation] = []  # 行动建议
 
 
+class StructuredInputValidation(BaseModel):
+    valid: bool
+    missing_fields: list[str]
+
+
 # ---------------------------------------------------------------------------
 # 工具
 # ---------------------------------------------------------------------------
@@ -235,11 +242,6 @@ def _diag_json(structured: StructuredInput) -> str:
 # ---------------------------------------------------------------------------
 
 def _fmt_evidence(si: StructuredInput) -> str:
-    if not si.evidence:
-        return (
-            "（未提供证据条目。以下分析基于结构化输入中的事件描述与利益推断，"
-            "置信度相应下调；如需提高可信度，请在向导「证据与置信度」步骤补充来源。）"
-        )
     lines = []
     for i, e in enumerate(si.evidence, 1):
         content = e.content.strip()
@@ -247,7 +249,7 @@ def _fmt_evidence(si: StructuredInput) -> str:
             continue
         src = f"（来源：{e.source.strip()}）" if e.source.strip() else ""
         lines.append(f"{i}. {content}{src}")
-    return "\n".join(lines) if lines else "（证据列表为空，未纳入分析。）"
+    return "\n".join(lines)
 
 
 def _fmt_confidence(si: StructuredInput) -> str:
@@ -260,31 +262,84 @@ def _fmt_confidence(si: StructuredInput) -> str:
 
 def _fmt_conflicts(si: StructuredInput) -> str:
     pts = [c for c in si.conflict_points if (c.point or "").strip()]
-    if not pts:
-        return (
-            "（未单独标注冲突点。可从「三元结构分析正文」各节的利益张力与关系图中"
-            "推断主要矛盾；建议在关系步骤补充，以提升结论的可操作性。）"
-        )
     lines = []
-    for i, c in enumerate(pts, 1):
-        between = f"【{c.between.strip()}】" if c.between.strip() else ""
-        lines.append(f"{i}. {between} {c.point.strip()}".strip())
-    return "\n".join(lines)
+    seen = set()
+    for c in pts:
+        parties = re.split(r"\s*(?:vs|VS|对|与|—|-)\s*", c.between.strip(), maxsplit=1)
+        if len(parties) != 2:
+            continue
+        key = (parties[0], parties[1], c.point.strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(
+            f"【{parties[0]}】对【{parties[1]}】在【{c.point.strip()}】上的张力："
+            f"双方对收益取得、成本承担和执行边界的预期不一致。"
+        )
+    for relation in si.relations:
+        interest = relation.label.strip() or "关系边界"
+        key = (relation.source, relation.target, interest)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(
+            f"【{relation.source}】对【{relation.target}】在【{interest}】上的张力："
+            f"这条关系同时决定资源如何流动以及相应成本由谁承担。"
+        )
+        if len(lines) >= 5:
+            break
+    return "\n".join(f"{i}. {line}" for i, line in enumerate(lines[:5], 1))
 
 
 def _fmt_reco(si: StructuredInput) -> str:
     recs = [r for r in si.recommendations if (r.action or "").strip()]
-    if not recs:
-        return (
-            "（未提供具体行动建议。可基于「结论」的核心判断，由决策者自行制定"
-            "针对各方的处置方案；建议在向导「行动建议」步骤补充。）"
-        )
     lines = []
     for i, r in enumerate(recs, 1):
         target = f"**对象：{r.target.strip()}**  " if r.target.strip() else ""
         rationale = f"  \n   理由：{r.rationale.strip()}" if r.rationale.strip() else ""
         lines.append(f"{i}. {target}{r.action.strip()}{rationale}")
     return "\n".join(lines)
+
+
+def validate_structured_input(
+    value: StructuredInput | dict,
+) -> StructuredInputValidation:
+    """Validate whether structured data can support a formal report."""
+    try:
+        si = (
+            value
+            if isinstance(value, StructuredInput)
+            else StructuredInput.model_validate(value)
+        )
+    except Exception:
+        return StructuredInputValidation(
+            valid=False,
+            missing_fields=["结构化字段格式"],
+        )
+
+    missing = []
+    if not si.event.strip():
+        missing.append("事件事实")
+    if len(si.actors) < 2:
+        missing.append("至少 2 个利益主体")
+    if not si.relations:
+        missing.append("主体关系")
+    if not [e for e in si.evidence if e.content.strip() and e.source.strip()]:
+        missing.append("带来源的证据")
+    if not [r for r in si.recommendations if r.target.strip() and r.action.strip()]:
+        missing.append("按主体填写的行动建议")
+    return StructuredInputValidation(valid=not missing, missing_fields=missing)
+
+
+def _validate_formal_input(si: StructuredInput) -> None:
+    """规则引擎不猜事实；输入不足时明确拒绝生成伪完整报告。"""
+    validation = validate_structured_input(si)
+    if not validation.valid:
+        raise ValueError(
+            "规则引擎无法仅凭题目生成正式报告；请补齐"
+            + "、".join(validation.missing_fields)
+            + "，或改用已配置的语言模型模式。"
+        )
 
 
 def _fmt_interest_config(a: ActorIn) -> str:
@@ -306,6 +361,7 @@ def _fmt_interest_config(a: ActorIn) -> str:
 # ---------------------------------------------------------------------------
 
 def generate(structured: StructuredInput) -> str:
+    _validate_formal_input(structured)
     title = structured.title or "未命名分析"
     atype = structured.analysis_type or "case"
     concepts = _pick_concepts(structured)
@@ -340,7 +396,7 @@ def generate(structured: StructuredInput) -> str:
             proposition = "本案的本质，是一组利益在既有规则下的重新定价。"
 
     # 事实摘要
-    fact = structured.event.strip() or "（未提供事件描述）"
+    fact = structured.event.strip()
 
     # 分析质量增强块
     evidence_block = _fmt_evidence(structured)
@@ -376,16 +432,6 @@ def generate(structured: StructuredInput) -> str:
         # 插入 DIAGRAM（每节后附，便于前端抽取；引擎取首个即可）
         if i == 1:
             body_sections += _diag_json(structured) + "\n"
-
-    # 若没有任何主体，给一段通用正文 + 图
-    if not structured.actors:
-        body_sections = (
-            "### 第1节：未标注主体的利益冲突\n\n"
-            f"{fact}\n\n"
-            "由于未提供具体主体，以下仅按已给事件做结构占位；补充主体与利益后可自动展开分节分析。\n\n"
-            + _diag_json(structured)
-            + "\n"
-        )
 
     # 结论
     actor_names = "、".join(a.name for a in structured.actors) or "相关各方"
@@ -458,7 +504,7 @@ def _case_report(title, fact, tension, proposition, concept_rows, body_sections,
 
 ## 附录
 
-**数据来源**：（结构化输入模式，来源由录入者在向导「证据与置信度」步骤补充；本节不虚构任何未提供的出处）
+{evidence_block}
 
 {COPYRIGHT}
 """
@@ -533,7 +579,7 @@ def _policy_report(structured, title, fact, tension, proposition, concept_rows,
 
 ## 附录/数据溯源
 
-**数据来源**：（结构化输入模式，来源由录入者在向导「证据与置信度」步骤补充；本节不虚构任何未提供的出处）
+{evidence_block}
 
 {COPYRIGHT}
 """
