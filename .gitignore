@@ -7,6 +7,7 @@ __pycache__/
 .reasonix/
 reasonix.toml
 *.log
+rewrite_log_batch*.txt
 lo_install.log
 /.runtime/
 
