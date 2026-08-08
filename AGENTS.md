@@ -37,7 +37,7 @@ project_root/（本仓库 = 内核 + 后端 API + Next.js 前端完整项目）
 │   │   ├── engine_bridge.py     ← 内核黑盒门面（调 export_from_text）
 │   │   ├── models.py / db.py    ← SQLite（Task/Project/ReportVersion 版本留痕）
 │   │   └── routers/             ← analyze/tasks/search/cases/reports/…
-│   └── tests/                   ← 120 个后端测试
+│   └── tests/                   ← 124 个后端测试
 │
 ├── frontend/                    ← Next.js 15 本地工作台（只调用本仓库 backend API）
 │   ├── src/app/                 ← 首页、分析、项目、报告、利益关系网络、设置等路由
