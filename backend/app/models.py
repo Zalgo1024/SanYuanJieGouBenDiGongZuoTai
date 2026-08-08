@@ -17,9 +17,11 @@ from sqlalchemy import (
     ForeignKey,
     Float,
     Integer,
+    Index,
     JSON,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import relationship
 
@@ -139,8 +141,20 @@ class ReportVersion(Base):
     """
 
     __tablename__ = "report_versions"
-
-
+    __table_args__ = (
+        Index(
+            "uq_report_versions_task_version",
+            "task_id",
+            "version_no",
+            unique=True,
+        ),
+        Index(
+            "uq_report_versions_one_current",
+            "task_id",
+            unique=True,
+            sqlite_where=text("is_current = 1"),
+        ),
+    )
     id = Column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
     task_id = Column(
         String(32),

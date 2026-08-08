@@ -162,6 +162,20 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_versions_task_version "
             "ON report_versions (task_id, version_no)"
         ))
+        # 历史库若曾出现多个 current，保留版本号最高的一条。
+        conn.execute(text(
+            "UPDATE report_versions SET is_current = 0 "
+            "WHERE is_current = 1 AND EXISTS ("
+            "  SELECT 1 FROM report_versions newer"
+            "  WHERE newer.task_id = report_versions.task_id"
+            "    AND newer.is_current = 1"
+            "    AND newer.version_no > report_versions.version_no"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_versions_one_current "
+            "ON report_versions (task_id) WHERE is_current = 1"
+        ))
         conn.commit()
 
 
