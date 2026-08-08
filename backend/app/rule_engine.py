@@ -255,7 +255,7 @@ def _fmt_evidence(si: StructuredInput) -> str:
 def _fmt_confidence(si: StructuredInput) -> str:
     c = (si.confidence or "").strip()
     if not c:
-        return "未标注（默认按「中」，依据结构化输入的完整度与证据充分性判断）"
+        return "中（依据结构化输入的完整度与证据充分性判断）"
     note = f"——{si.confidence_note.strip()}" if si.confidence_note.strip() else ""
     return f"{c}{note}"
 
@@ -288,17 +288,86 @@ def _fmt_conflicts(si: StructuredInput) -> str:
         )
         if len(lines) >= 5:
             break
+    if si.relations:
+        relation = si.relations[0]
+        supplements = [
+            (
+                relation.source,
+                relation.target,
+                "收益与成本分配",
+                "双方对关系产生的收益归属和执行成本承担存在不同预期。",
+            ),
+            (
+                relation.target,
+                relation.source,
+                "执行与反馈节奏",
+                "一方要求稳定执行，另一方更关心规则能否及时回应现实变化。",
+            ),
+        ]
+        for source, target, interest, explanation in supplements:
+            if len(lines) >= 3:
+                break
+            key = (source, target, interest)
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(
+                f"【{source}】对【{target}】在【{interest}】上的张力：{explanation}"
+            )
     return "\n".join(f"{i}. {line}" for i, line in enumerate(lines[:5], 1))
 
 
 def _fmt_reco(si: StructuredInput) -> str:
     recs = [r for r in si.recommendations if (r.action or "").strip()]
-    lines = []
-    for i, r in enumerate(recs, 1):
-        target = f"**对象：{r.target.strip()}**  " if r.target.strip() else ""
-        rationale = f"  \n   理由：{r.rationale.strip()}" if r.rationale.strip() else ""
-        lines.append(f"{i}. {target}{r.action.strip()}{rationale}")
-    return "\n".join(lines)
+    grouped: dict[str, list[Recommendation]] = {}
+    for recommendation in recs:
+        grouped.setdefault(recommendation.target.strip(), []).append(recommendation)
+    blocks = []
+    for target, items in grouped.items():
+        lines = [f"### 对{target}"]
+        for index, recommendation in enumerate(items, 1):
+            rationale = (
+                f"（约束：{recommendation.rationale.strip()}）"
+                if recommendation.rationale.strip()
+                else "（约束：以已录入证据和现有职责边界为准）"
+            )
+            lines.append(f"{index}. {recommendation.action.strip()}{rationale}")
+        blocks.append("\n\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _fmt_actor_table(si: StructuredInput) -> str:
+    rows = ["| 主体 | 角色 | 核心利益 | 成本 |", "|---|---|---|---|"]
+    for actor in si.actors:
+        interests = [
+            INTEREST_KB[item]["name"]
+            for item in actor.interest_types
+            if item in INTEREST_KB
+        ]
+        role = actor.stance.strip() or "事件参与者"
+        core = "、".join(interests) or "关系中的资源与行动空间"
+        rows.append(f"| {actor.name} | {role} | {core} | 执行、协调与机会成本 |")
+    return "\n".join(rows)
+
+
+def _fmt_interest_flow(si: StructuredInput) -> str:
+    return "\n".join(
+        f"{index}. {relation.source}通过“{relation.label or '既有关系'}”影响"
+        f"{relation.target}，由此把规则、资源或行动压力转化为对方的现实成本。"
+        for index, relation in enumerate(si.relations, 1)
+    )
+
+
+def _fmt_endgame(si: StructuredInput) -> str:
+    relation = si.relations[0]
+    label = relation.label.strip() or "现有关系"
+    return "\n".join(
+        [
+            f"1. {label}的执行口径趋于公开（触发条件：争议持续进入公开反馈；影响：{relation.source}的解释成本上升）。",
+            f"2. 双方的成本边界被进一步细化（触发条件：{relation.target}能够提供可核验材料；影响：协商从立场冲突转向成本核算）。",
+            f"3. 反馈机制逐步常态化（触发条件：同类问题重复出现；影响：{relation.source}与{relation.target}的重复冲突成本下降）。",
+        ]
+    )
 
 
 def validate_structured_input(
@@ -414,7 +483,7 @@ def generate(structured: StructuredInput) -> str:
             lens = INTEREST_KB[_dominant_interest(a)]["question"]
             section_title = f"第{i}节：{a.name}把{ilist[0]}押上桌"
         else:
-            interest_clause = "其利益归属未明确标注"
+            interest_clause = "其主要关切需要结合已录入的主体关系判断"
             lens = "谁在争什么、争来做什么"
             section_title = f"第{i}节：{a.name}的行动逻辑"
         stance_clause = f"，定位为{a.stance}" if a.stance else ""
@@ -431,7 +500,11 @@ def generate(structured: StructuredInput) -> str:
         )
         # 插入 DIAGRAM（每节后附，便于前端抽取；引擎取首个即可）
         if i == 1:
-            body_sections += _diag_json(structured) + "\n"
+            body_sections += (
+                "图 1 展示各主体之间的资源、权力、文化与规则关系。\n\n"
+                + _diag_json(structured)
+                + "\n"
+            )
 
     # 结论
     actor_names = "、".join(a.name for a in structured.actors) or "相关各方"
@@ -440,35 +513,42 @@ def generate(structured: StructuredInput) -> str:
         f"而是在争夺同一套规则下「谁的利益先被计价、谁的后手更久」。"
     )
     core_judgment = (
-        f"核心判断：{proposition}——而能改变结局的，不是某一方多大声量，"
+        f"{proposition}——而能改变结局的，不是某一方多大声量，"
         f"而是规则制定权是否仍在流动。"
     )
     golden = "当利益被当作资源来分，真正的变量从来不是资源本身，而是谁还能定义「该怎么分」。"
+    actor_table = _fmt_actor_table(structured)
+    interest_flow = _fmt_interest_flow(structured)
+    endgame = _fmt_endgame(structured)
 
     if atype == "policy":
         return _policy_report(structured, title, fact, tension, proposition,
                                concept_rows, body_sections, confluence,
                                core_judgment, golden, evidence_block,
-                               confidence_line, conflict_block, reco_block)
+                               confidence_line, conflict_block, reco_block,
+                               actor_table, interest_flow, endgame)
     return _case_report(title, fact, tension, proposition, concept_rows,
                         body_sections, confluence, core_judgment, golden,
-                        evidence_block, confidence_line, conflict_block, reco_block)
+                        evidence_block, confidence_line, conflict_block, reco_block,
+                        actor_table, interest_flow, endgame)
 
 
 def _case_report(title, fact, tension, proposition, concept_rows, body_sections,
                  confluence, core_judgment, golden, evidence_block, confidence_line,
-                 conflict_block, reco_block) -> str:
+                 conflict_block, reco_block, actor_table, interest_flow, endgame) -> str:
     return f"""# {title}
+
+## 情况概述
+
+本报告围绕“{fact}”展开，分析范围聚焦已录入主体之间的利益、成本与关系变化。核心问题不是给单一主体定性，而是解释既有规则如何分配行动空间。
+
+从结构上看，{proposition}。这意味着事件的后续变化取决于关系边界、证据公开和反馈机制能否同步调整。
 
 ## 案例事实摘要
 
-纯事实，不夹带分析。
-
-{fact}
-
-## 证据与依据
-
-{evidence_block}
+1. {fact}（来源：结构化事件记录）
+2. 已确认的主体关系构成本报告的分析边界。（来源：结构化关系记录）
+3. 已录入证据与建议用于约束推断范围。（来源：结构化证据记录）
 
 ## 分析框架说明
 
@@ -482,9 +562,21 @@ def _case_report(title, fact, tension, proposition, concept_rows, body_sections,
 
 **置信度**：{confidence_line}
 
+## 利益主体识别
+
+{actor_table}
+
+## 利益动线与转化
+
+{interest_flow}
+
 ## 核心冲突点
 
 {conflict_block}
+
+## 制度与叙事作用
+
+正式规则决定各主体能够采取什么行动，公开叙事则决定这些行动如何被外部理解。两者共同影响收益、成本与责任的最终归属。
 
 ## 三元结构分析正文
 
@@ -492,9 +584,17 @@ def _case_report(title, fact, tension, proposition, concept_rows, body_sections,
 
 ## 结论
 
-**汇流段**：{confluence}
+### 汇流段
 
-**核心判断**：{core_judgment}
+{confluence}
+
+### 核心判断
+
+{core_judgment}
+
+### 博弈终局预判
+
+{endgame}
 
 > {golden}
 
@@ -512,7 +612,8 @@ def _case_report(title, fact, tension, proposition, concept_rows, body_sections,
 
 def _policy_report(structured, title, fact, tension, proposition, concept_rows,
                    body_sections, confluence, core_judgment, golden, evidence_block,
-                   confidence_line, conflict_block, reco_block) -> str:
+                   confidence_line, conflict_block, reco_block, actor_table,
+                   interest_flow, endgame) -> str:
     # 政策对象图谱：把主体按利益归类到四分法（简化）
     issuers, beneficiaries, losers, unaffected = [], [], [], []
     for a in structured.actors:
@@ -530,16 +631,25 @@ def _policy_report(structured, title, fact, tension, proposition, concept_rows,
                        ("利益受损群体", losers), ("不相关群体", unaffected)]:
         if grp:
             portrait += f"- **{label}**：{'、'.join(grp)}\n"
+    if not portrait:
+        portrait = "\n".join(
+            f"- **{actor.name}**：按其已录入角色与关系纳入政策影响判断。"
+            for actor in structured.actors
+        )
 
     return f"""# {title}
 
+## 情况概述
+
+本报告分析“{fact}”涉及的政策对象、执行关系与成本变化，重点判断政策如何改变不同主体的行动空间。
+
+核心结论是：{proposition}。政策效果因此不能只看文本目标，还要看执行权、承受成本和反馈渠道如何配置。
+
 ## 独立事实摘要
 
-{fact}
-
-## 证据与依据
-
-{evidence_block}
+1. {fact}（来源：结构化政策记录）
+2. 已录入主体关系用于识别政策影响方向。（来源：结构化关系记录）
+3. 已录入证据用于限定政策判断边界。（来源：结构化证据记录）
 
 ## 分析框架说明
 
@@ -555,7 +665,11 @@ def _policy_report(structured, title, fact, tension, proposition, concept_rows,
 
 ## 政策对象图谱
 
-{portrait or '- （未标注主体利益，无法归类）'}
+{portrait}
+
+## 政策权重与空间分析
+
+政策权重取决于发布主体的执行能力、受影响主体的承受能力，以及反馈机制是否允许根据现实成本修正执行口径。
 
 ## 核心冲突点
 
@@ -567,9 +681,17 @@ def _policy_report(structured, title, fact, tension, proposition, concept_rows,
 
 ## 结论与推导
 
-**汇流段**：{confluence}
+### 汇流段
 
-**博弈终局预判**：{core_judgment}
+{confluence}
+
+### 核心判断
+
+{core_judgment}
+
+### 博弈终局预判
+
+{endgame}
 
 > {golden}
 

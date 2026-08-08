@@ -469,3 +469,29 @@ def test_structured_llm_task_passes_rule_fallback_payload(
     assert not errs
     assert captured["structured"] == structured
     assert any(item.get("status") == "done" for item in coll.items)
+
+
+def test_quality_gate_failure_is_persisted_with_its_own_phase(
+    client, subbed, monkeypatch
+):
+    from app.db import SessionLocal
+
+    monkeypatch.setattr(
+        "app.rule_engine.generate",
+        lambda _structured: "# 失败报告\n\n## 结论\n\n（未提供分析）",
+    )
+    tid = _insert_task()
+    coll = subbed(tid)
+
+    _run(tid)
+
+    with SessionLocal() as db:
+        task = db.get(Task, tid)
+        assert task.status == "error"
+        assert task.error_phase == "quality_gate"
+        assert task.quality_result["valid"] is False
+        assert any(
+            issue["code"] == "failure_placeholder"
+            for issue in task.quality_result["issues"]
+        )
+    assert any(item.get("status") == "error" for item in coll.items)

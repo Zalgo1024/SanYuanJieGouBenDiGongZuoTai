@@ -51,13 +51,21 @@ def test_concept_cap_respected():
     assert len(rule_engine._pick_concepts(pol)) == 4, "政策型应命中 4 概念上限"
 
 
-def test_empty_input_still_valid():
+def test_empty_input_is_rejected_instead_of_generating_placeholders():
+    import pytest
+
     si = rule_engine.StructuredInput(title="空输入测试")
+    with pytest.raises(ValueError, match="规则引擎无法仅凭题目生成正式报告"):
+        rule_engine.generate(si)
+
+
+def test_rule_output_has_no_failure_placeholders():
+    si = rule_engine.StructuredInput.model_validate(_load("sample_event"))
     md = rule_engine.generate(si)
-    actual = derive_fields(md, "case")
-    assert actual["has_diagram_block"]
-    assert actual["required_sections_present"]
-    assert actual["has_copyright"]
+
+    for forbidden in ("未提供", "未单独标注", "建议在", "结构占位", "利益关系图（占位）"):
+        assert forbidden not in md
+    assert md.count("上的张力：") >= 3
 
 
 def test_structured_input_validation():

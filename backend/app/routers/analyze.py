@@ -131,6 +131,7 @@ def get_result(task_id: str):
             "phase": t.phase,
             "progress_pct": t.progress_pct or 0,
             "search_results": t.search_results,
+            "quality": t.quality_result,
         }
 
 
@@ -214,6 +215,7 @@ def poll_task(task_id: str):
             "phase": t.phase,
             "progress_pct": t.progress_pct or 0,
             "search_results": t.search_results,
+            "quality": t.quality_result,
             "server_time": _now().isoformat(),
         }
 

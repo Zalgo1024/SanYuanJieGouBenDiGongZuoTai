@@ -124,6 +124,10 @@ class Task(Base):
     prompt_version = Column(String(32), nullable=True)    # 提示词版本（可复现）
     llm_raw_response = Column(Text, nullable=True)        # LLM 原始响应（截断存储，调试用）
 
+    # —— 报告写作规格的可执行质量闸门 ——
+    quality_score = Column(Integer, nullable=True)
+    quality_result = Column(JSON, nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=_now)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
 

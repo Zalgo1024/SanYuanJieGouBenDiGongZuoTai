@@ -126,6 +126,8 @@ def _classify_error(e: Exception, current_phase: str | None = None) -> tuple[str
     仅当错误文本关键词能定位到「不早于当前阶段」的更具体步骤时才采用，
     例如导出阶段报 docx 错误、整理阶段报 contract 错误，避免倒退误报。
     """
+    if getattr(e, "code", None) == "quality_gate":
+        return e.__class__.__name__, "quality_gate"
     msg = str(e).lower()
     forced: str | None = None
     if "diagram" in msg or "network" in msg:
@@ -324,6 +326,9 @@ def _process(task_id: str) -> None:
             t.llm_temperature = safe.get("llm_temperature")
             t.prompt_version = safe.get("prompt_version")
             t.llm_raw_response = raw_response
+            quality = safe.get("quality") or None
+            t.quality_score = quality.get("score") if isinstance(quality, dict) else None
+            t.quality_result = quality
             db.commit()
             # 阶段六·需求1：自动生成项目完成记录（日志）。若任务已归属某项目则更新其
             # 摘要/完成时间；否则按「每篇报告=一个已完成项目」自动建档，确保每次分析
@@ -341,6 +346,11 @@ def _process(task_id: str) -> None:
                 t.error_type = etype
                 t.error_phase = ephase
                 t.error_detail = err_msg
+                quality_result = getattr(e, "result", None)
+                if quality_result is not None:
+                    quality = quality_result.model_dump()
+                    t.quality_score = quality.get("score")
+                    t.quality_result = quality
                 db.commit()
         # 注意：必须在上面 with 块关闭前把要推送的字段取到局部变量；
         # 否则 t 已脱离 Session，访问 t.error 会抛 DetachedInstanceError，

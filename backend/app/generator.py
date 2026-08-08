@@ -14,6 +14,11 @@ import re
 from app.prompt_builder import build_system_prompt
 from app.engine_bridge import export_report
 from app import rule_engine
+from app.report_quality import (
+    ReportQualityError,
+    ReportQualityResult,
+    evaluate_report_quality,
+)
 
 
 def _truncate(text: str | None, limit: int = 64000) -> str | None:
@@ -111,10 +116,61 @@ class ReportGenerator:
             title=title or "", analysis_type=self.analysis_type, event=input_text or ""
         )
 
+    def _used_web_sources(self) -> bool:
+        return bool(self._coerce_bundle(self.materials).sources)
+
+    def _attach_source_appendix(self, markdown: str) -> str:
+        bundle = self._coerce_bundle(self.materials)
+        if not bundle.sources:
+            return markdown
+        from app.materials import format_source_appendix
+
+        appendix = format_source_appendix(bundle.sources).strip()
+        if not appendix or appendix in markdown:
+            return markdown
+        copyright_pos = markdown.find("分析框架：三元结构理论")
+        if copyright_pos >= 0:
+            return (
+                markdown[:copyright_pos].rstrip()
+                + "\n\n"
+                + appendix
+                + "\n\n"
+                + markdown[copyright_pos:]
+            )
+        return markdown.rstrip() + "\n\n" + appendix + "\n"
+
+    def _evaluate_quality(self, markdown: str) -> ReportQualityResult:
+        result = evaluate_report_quality(
+            markdown,
+            analysis_type=self.analysis_type,
+            used_web_sources=self._used_web_sources(),
+        )
+        self._last_quality = result
+        return result
+
+    @staticmethod
+    def _quality_revision_prompt(markdown: str, result: ReportQualityResult) -> str:
+        problems = "\n".join(
+            f"- {issue.code}: {issue.message}"
+            for issue in result.issues
+            if issue.severity == "error"
+        )
+        return (
+            "以下报告未通过质量闸门，请只修复列出的问题，不添加未经材料支持的事实。\n\n"
+            f"质量问题：\n{problems}\n\n"
+            f"待修订完整报告：\n\n{markdown}\n\n"
+            "请返回修订后的完整 Markdown，不要解释，不要用代码围栏包裹整篇。"
+        )
+
     def generate(self, input_text: str = "", title: str | None = None) -> str:
         if self.mode == "rule":
             si = self._build_structured(input_text, title)
             md = rule_engine.generate(si)
+            md = self._normalize(md, title)
+            md = self._attach_source_appendix(md)
+            quality = self._evaluate_quality(md)
+            if not quality.valid:
+                raise ReportQualityError(quality)
             self._last_contract = {
                 "valid": True,
                 "diagram_ok": True,
@@ -126,6 +182,7 @@ class ReportGenerator:
                 "engine_used": "rule",
                 "degraded_from_llm": False,
                 "degrade_reason": None,
+                "quality": quality.model_dump(),
             }
             self._engine_meta = {
                 "engine_used": "rule",
@@ -136,7 +193,7 @@ class ReportGenerator:
                 "degrade_reason": None,
                 "raw_response": None,
             }
-            return self._normalize(md, title)
+            return md
 
         # —— LLM 增强模式 ——
         from app.contract import validate_and_repair
@@ -164,16 +221,45 @@ class ReportGenerator:
             return self._fallback_or_raise(
                 input_text, title, f"LLM 调用失败：{msg}"
             )
-        md = self._normalize(raw, title)
-        si = (
-            self.structured
-            if isinstance(self.structured, rule_engine.StructuredInput)
-            else None
-        )
-        md, contract = validate_and_repair(md, self.analysis_type, si)
-        if contract.get("degrade"):
-            reason = "LLM 输出不符合契约（缺少可用利益关系图且必要章节缺失），已自动降级到规则引擎"
-            return self._fallback_or_raise(input_text, title, reason, raw=raw)
+        candidate_raw = raw
+        contract = None
+        quality = None
+        md = ""
+        for attempt in range(3):
+            md = self._normalize(candidate_raw, title)
+            md, contract = validate_and_repair(
+                md, self.analysis_type, self.structured
+            )
+            if not contract.get("degrade"):
+                quality = self._evaluate_quality(md)
+                if quality.valid:
+                    break
+            if attempt >= 2:
+                if contract.get("degrade"):
+                    reason = "LLM 输出连续三次不符合结构契约，无法形成正式报告"
+                    return self._fallback_or_raise(
+                        input_text, title, reason, raw=candidate_raw
+                    )
+                raise ReportQualityError(quality)
+            if contract.get("degrade"):
+                problems = "\n".join(f"- {error}" for error in contract.get("errors", []))
+                revision_user = (
+                    "以下报告不符合结构契约，请修复列出的问题并返回完整 Markdown。\n\n"
+                    f"契约问题：\n{problems}\n\n待修订报告：\n\n{md}"
+                )
+            else:
+                revision_user = self._quality_revision_prompt(md, quality)
+            try:
+                candidate_raw = llm.generate(
+                    system,
+                    revision_user,
+                    temperature=min(cfg["temperature"] + 0.1 * (attempt + 1), 1.0),
+                )
+            except Exception as exc:  # noqa: BLE001
+                msg = getattr(exc, "message", None) or str(exc)
+                return self._fallback_or_raise(
+                    input_text, title, f"LLM 定向修订失败：{msg}", raw=candidate_raw
+                )
 
         # LLM 成功且契约可用
         contract["mode"] = "llm"
@@ -181,6 +267,7 @@ class ReportGenerator:
         contract["degraded_from_llm"] = False
         contract["degrade_reason"] = None
         contract["prompt_version"] = cfg["prompt_version"]
+        contract["quality"] = quality.model_dump()
         self._last_contract = contract
         self._engine_meta = {
             "engine_used": "llm",
@@ -253,6 +340,44 @@ class ReportGenerator:
             except Exception:  # noqa: BLE001
                 pass
 
+        quality = None
+        if not contract.get("type_mismatch") and not contract.get("degrade"):
+            quality = self._evaluate_quality(md)
+        for attempt in range(2):
+            if quality is not None and quality.valid:
+                break
+            if quality is None:
+                problems = "\n".join(
+                    f"- {error}" for error in contract.get("errors", [])
+                )
+                revision_user = (
+                    "以下修订稿不符合结构契约，请修复问题并返回完整 Markdown。\n\n"
+                    f"契约问题：\n{problems}\n\n待修订报告：\n\n{md}"
+                )
+            else:
+                revision_user = self._quality_revision_prompt(md, quality)
+            try:
+                raw = llm.generate(
+                    system,
+                    revision_user,
+                    temperature=min(cfg["temperature"] + 0.1 * (attempt + 1), 1.0),
+                )
+            except Exception as exc:  # noqa: BLE001
+                msg = getattr(exc, "message", None) or str(exc)
+                raise ValueError(f"AI 再改质量修订失败：{msg}") from exc
+            md = self._normalize(raw, title)
+            md, contract = validate_and_repair(md, self.analysis_type, None)
+            quality = (
+                None
+                if contract.get("type_mismatch") or contract.get("degrade")
+                else self._evaluate_quality(md)
+            )
+        if quality is None or not quality.valid:
+            if quality is not None:
+                raise ReportQualityError(quality)
+            raise ValueError("AI 再改连续三次不符合结构契约")
+
+        contract["quality"] = quality.model_dump()
         self._last_contract = contract
         self._engine_meta = {
             "engine_used": "llm",
@@ -277,6 +402,10 @@ class ReportGenerator:
         si = self._build_structured(input_text, title)
         md = rule_engine.generate(si)
         md = self._normalize(md, title)
+        md = self._attach_source_appendix(md)
+        quality = self._evaluate_quality(md)
+        if not quality.valid:
+            raise ReportQualityError(quality)
         self._last_contract = {
             "valid": True,
             "diagram_ok": True,
@@ -289,6 +418,7 @@ class ReportGenerator:
             "degraded_from_llm": True,
             "degrade_reason": reason,
             "prompt_version": PROMPT_VERSION,
+            "quality": quality.model_dump(),
         }
         self._engine_meta = {
             "engine_used": "rule",
@@ -345,6 +475,13 @@ class ReportGenerator:
             "degraded_from_llm": False,
             "degrade_reason": None,
         }
+
+    def quality(self) -> ReportQualityResult:
+        return getattr(self, "_last_quality", None) or ReportQualityResult(
+            valid=False,
+            score=0,
+            issues=[],
+        )
 
     def export(
         self,
@@ -422,6 +559,7 @@ class ReportGenerator:
         network = self.extract_network(md)
         _safe_phase("organize", 75)
         contract = self.validate(md, title)
+        quality = self.quality()
         _safe_phase("output", 85)
         exp = self.export(md, title, output_dir, slug)
         # 合并：Markdown 原文 + 网络图抽取 + 契约校验 + 引擎导出结果 + 引擎元信息
@@ -430,6 +568,7 @@ class ReportGenerator:
             "markdown": md,
             "network": network,
             "contract": contract,
+            "quality": quality.model_dump(),
             # —— 阶段四：标注本次报告由哪个引擎生成，是否从 LLM 降级 ——
             "engine_used": meta.get("engine_used"),
             "degraded_from_llm": meta.get("degraded_from_llm", False),

@@ -112,6 +112,10 @@ def init_db() -> None:
             alters.append("ALTER TABLE tasks ADD COLUMN input_mode VARCHAR(16)")
         if "requested_engine" not in cols:
             alters.append("ALTER TABLE tasks ADD COLUMN requested_engine VARCHAR(16)")
+        if "quality_score" not in cols:
+            alters.append("ALTER TABLE tasks ADD COLUMN quality_score INTEGER")
+        if "quality_result" not in cols:
+            alters.append("ALTER TABLE tasks ADD COLUMN quality_result JSON")
         # 阶段五：全网搜索（可选增强）
         if "search_enabled" not in cols:
             alters.append("ALTER TABLE tasks ADD COLUMN search_enabled BOOLEAN")
