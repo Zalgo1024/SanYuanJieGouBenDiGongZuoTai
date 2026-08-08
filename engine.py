@@ -13,6 +13,8 @@
 
 import datetime
 import os
+import re
+import shutil
 from typing import Optional
 
 from config import load_config, Config
@@ -22,6 +24,45 @@ from auto_number import auto_number_headings
 
 _ENGINE_VERSION = "1.0.0"
 _REPORTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
+# 引擎自动时间戳目录的后缀：_YYYYMMDD_HHMMSS
+_TS_SUFFIX_RE = re.compile(r"_\d{8}_\d{6}$")
+# slug 只允许安全字符，防路径穿越（.. / 分隔符等）
+_SLUG_SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_XML_ILLEGAL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
+
+def sanitize_xml_text(value: str | None) -> str:
+    """移除 Word XML 1.0 不接受的控制字符，保留可读正文。"""
+    return _XML_ILLEGAL_CHARS_RE.sub("", value or "")
+
+
+def _sanitize_xml_value(value):
+    if isinstance(value, str):
+        return sanitize_xml_text(value)
+    if isinstance(value, list):
+        return [_sanitize_xml_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_xml_value(item) for item in value)
+    if isinstance(value, dict):
+        return {
+            sanitize_xml_text(str(key)): _sanitize_xml_value(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _sanitize_parsed_report(report: ParsedReport) -> ParsedReport:
+    """在渲染前净化所有会进入 Word XML 的文本字段。"""
+    report.title = sanitize_xml_text(report.title)
+    for section in report.section_seq:
+        section.title = sanitize_xml_text(section.title)
+        for block in section.blocks:
+            block.text = sanitize_xml_text(block.text)
+            block.rows = _sanitize_xml_value(block.rows)
+            block.items = _sanitize_xml_value(block.items)
+            block.segments = _sanitize_xml_value(block.segments)
+            block.diagram_data = _sanitize_xml_value(block.diagram_data)
+    return report
 
 
 class CaseAnalysisEngine:
@@ -35,6 +76,49 @@ class CaseAnalysisEngine:
         self._renderer = None   # 延迟导入 docx_renderer
         self._converter = None  # 延迟导入 pdf_converter
         self._diagrams: list[dict] = []  # 本次导出的图表信息
+
+    def _pick_output_folder(
+        self,
+        safe_name: str,
+        output_dir: Optional[str],
+        slug: Optional[str],
+        overwrite: bool,
+        timestamp: str,
+    ) -> str:
+        """统一定位输出目录（export_from_text / export_from_parsed 共用）。
+
+        - output_dir + slug：slug 消毒后拼子目录，防路径穿越。
+        - overwrite：复用固定目录 reports/safe_name，并只清理本报告的历史
+          时间戳目录（精确匹配 `_YYYYMMDD_HHMMSS` 后缀），避免前缀误删
+          标题相近的其他报告（如「数据」vs「数据_备份」）。
+        - 否则：output_dir 或 reports/safe_name_时间戳。
+        """
+        if output_dir and slug:
+            slug_safe = _SLUG_SAFE_RE.sub("_", slug).strip("._")
+            # 压掉可能残留的连续点（如 "x..y"），避免任何歧义
+            while ".." in slug_safe:
+                slug_safe = slug_safe.replace("..", "_")
+            return os.path.join(output_dir, f"{safe_name}_{slug_safe}")
+        if overwrite:
+            try:
+                old_entries = os.listdir(_REPORTS_DIR)
+            except OSError:
+                old_entries = []
+            for name in old_entries:
+                if not name.startswith(safe_name + "_"):
+                    continue
+                if not _TS_SUFFIX_RE.search(name):
+                    continue  # 非引擎时间戳目录，不动
+                full = os.path.join(_REPORTS_DIR, name)
+                if not os.path.isdir(full):
+                    continue
+                try:
+                    shutil.rmtree(full)
+                except OSError:
+                    # 沙箱 safe-delete 拦截删除时忽略，继续写到固定目录
+                    pass
+            return os.path.join(_REPORTS_DIR, safe_name)
+        return output_dir or os.path.join(_REPORTS_DIR, f"{safe_name}_{timestamp}")
 
     # ── 核心接口 ──────────────────────────────────────────────
 
@@ -69,36 +153,22 @@ class CaseAnalysisEngine:
                 "tone": "neutral/provocative"
             }
         """
-        # 1. 解析正文
-        body = auto_number_headings(body)
+        # 1. 解析正文。外部网页/附件可能混入不可见控制字符，必须在进入 Word 前剔除。
+        title = sanitize_xml_text(title)
+        body = auto_number_headings(sanitize_xml_text(body))
         report = parse_report(body)
         if not report.title and title:
             report.title = title
+        report = _sanitize_parsed_report(report)
         # 分析基调（二选一）：neutral=客观中立 / provocative=煽动性，非法值回退 neutral
         if tone not in ("neutral", "provocative"):
             tone = "neutral"
         report.tone = tone
 
         # 2. 创建输出目录
-        import glob
-        import shutil
-
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = self._safe_filename(title)
-        # slug（如 task_id）提供时，在 output_dir 下建独立子目录，避免并发同名任务互相覆盖
-        if output_dir and slug:
-            folder = os.path.join(output_dir, f"{safe_name}_{slug}")
-        elif overwrite:
-            # 覆盖模式：复用固定目录名，并清理同名历史时间戳目录，始终只留 1 份
-            for old in glob.glob(os.path.join(_REPORTS_DIR, f"{safe_name}_*")):
-                try:
-                    shutil.rmtree(old)
-                except OSError:
-                    # 沙箱 safe-delete 拦截删除时忽略，继续写到固定目录
-                    pass
-            folder = os.path.join(_REPORTS_DIR, safe_name)
-        else:
-            folder = output_dir or os.path.join(_REPORTS_DIR, f"{safe_name}_{timestamp}")
+        folder = self._pick_output_folder(safe_name, output_dir, slug, overwrite, timestamp)
         os.makedirs(folder, exist_ok=True)
 
         # 3. 生成 Word
@@ -127,23 +197,14 @@ class CaseAnalysisEngine:
         tone: str = "neutral",
     ) -> dict[str, str]:
         """从已解析的报告数据导出，跳过解析步骤。"""
+        report = _sanitize_parsed_report(report)
         title = report.title or "未命名报告"
         if tone not in ("neutral", "provocative"):
             tone = "neutral"
         report.tone = tone
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = self._safe_filename(title)
-        if output_dir and slug:
-            folder = os.path.join(output_dir, f"{safe_name}_{slug}")
-        elif overwrite:
-            import glob
-            import shutil
-
-            for old in glob.glob(os.path.join(_REPORTS_DIR, f"{safe_name}_*")):
-                shutil.rmtree(old)
-            folder = os.path.join(_REPORTS_DIR, safe_name)
-        else:
-            folder = output_dir or os.path.join(_REPORTS_DIR, f"{safe_name}_{timestamp}")
+        folder = self._pick_output_folder(safe_name, output_dir, slug, overwrite, timestamp)
         os.makedirs(folder, exist_ok=True)
 
         self._diagrams = []
