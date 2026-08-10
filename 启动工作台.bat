@@ -9,6 +9,10 @@ echo   (frontend http://127.0.0.1:3000  +  backend http://127.0.0.1:8000)
 echo ============================================
 echo.
 
+echo [1/2] Cleaning up any previous instances...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\local-workbench.ps1" -Action stop >nul 2>&1
+echo [2/2] Starting fresh instances...
+
 call "%~dp0start.bat"
 set "EXIT_CODE=%ERRORLEVEL%"
 
