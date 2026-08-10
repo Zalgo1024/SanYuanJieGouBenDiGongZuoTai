@@ -136,6 +136,7 @@ describe("createAnalysisTask", () => {
         project_id: null,
         material_ids: [],
         web: false,
+        render_only: false,
       }),
     }));
   });

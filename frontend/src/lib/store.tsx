@@ -9,6 +9,7 @@ import {
   type WorkspaceSettings,
 } from "./domain";
 import { seedState } from "./seed-data";
+import { apiRequest } from "./api";
 import { fetchCurrentReport, fetchTaskById, fetchWorkspaceSnapshot } from "./workspace-api";
 
 export const STORAGE_KEY = "triad-analysis-workbench.v1";
@@ -31,6 +32,7 @@ export interface AppStoreValue {
   refreshWorkspace: () => Promise<void>;
   loadTask: (taskId: string) => Promise<AnalysisTask | null>;
   loadReport: (taskId: string) => Promise<Report | null>;
+  retryTask: (taskId: string) => Promise<string | null>;
   deleteReports: (reportIds: string[]) => void;
   updateTaskProgress: (taskId: string, update: Pick<AnalysisTask, "status" | "phase" | "progress">) => void;
   updateSettings: (settings: Partial<WorkspaceSettings>) => void;
@@ -56,11 +58,7 @@ export function parseStoredSettings(raw: string | null): WorkspaceSettings {
     const parsed = JSON.parse(raw) as StoredPreferences;
     const settings = parsed.settings ?? {};
     return {
-      defaultEngine: settings.defaultEngine === "llm"
-        ? "llm"
-        : settings.defaultEngine === "rule"
-          ? "rule"
-          : "auto",
+      defaultEngine: "auto",
       theme: settings.theme === "dark" ? "dark" : "light",
       defaultExport: settings.defaultExport === "html" ? "html" : "markdown",
     };
@@ -210,6 +208,25 @@ export function AppStoreProvider({
     }
   }, [demo]);
 
+  const retryTask = useCallback(async (taskId: string) => {
+    if (demo) return null;
+    try {
+      const result = await apiRequest(`/api/analyze/${taskId}/retry`, { method: "POST" }) as { new_task_id?: string };
+      const newId = result.new_task_id ?? null;
+      if (newId) {
+        const task = await fetchTaskById(newId);
+        if (task) dispatch({ type: "UPSERT_TASK", task });
+      }
+      setConnection("online");
+      setConnectionError("");
+      return newId;
+    } catch (reason) {
+      setConnection("offline");
+      setConnectionError(errorMessage(reason));
+      return null;
+    }
+  }, [demo]);
+
   useEffect(() => {
     if (initialState || demo) return;
     dispatch({ type: "UPDATE_SETTINGS", settings: parseStoredSettings(window.localStorage.getItem(STORAGE_KEY)) });
@@ -239,6 +256,7 @@ export function AppStoreProvider({
     refreshWorkspace,
     loadTask,
     loadReport,
+    retryTask,
     deleteReports(reportIds) {
       if (!reportIds.length) return;
       dispatch({ type: "REMOVE_REPORTS", reportIds });
@@ -253,7 +271,7 @@ export function AppStoreProvider({
       dispatch({ type: "UPDATE_SETTINGS", settings });
       setNotice("工作空间设置已更新");
     },
-  }), [connection, connectionError, hydrated, loadReport, loadTask, refreshWorkspace, state]);
+  }), [connection, connectionError, hydrated, loadReport, loadTask, retryTask, refreshWorkspace, state]);
 
   return (
     <AppStoreContext.Provider value={value}>

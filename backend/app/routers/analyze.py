@@ -35,6 +35,7 @@ class AnalyzeRequest(BaseModel):
     search: bool | None = None  # 阶段五：搜索开关 None=自动 | True=强制搜索 | False=跳过（保留兼容）
     web: bool = False  # T8：联网写报告（检索/抓取素材注入）
     source_urls: list[str] | None = None  # T8：用户勾选来源白名单（null=自动检索全部）
+    render_only: bool = False  # A 方案：用户已写好正文，仅确定性渲染（不调 LLM/不联网）
 
 
 def llm_is_available() -> bool:
@@ -43,6 +44,38 @@ def llm_is_available() -> bool:
 
 @router.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
+    # —— A 方案：确定性「直接渲染」入口（用户已写好正文，仅渲染，不调 LLM/不联网）——
+    if req.render_only:
+        if not req.input_text.strip():
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "empty_markdown",
+                        "message": "直接撰写模式需要粘贴分析正文。",
+                        "phase": "input_validation",
+                        "details": [],
+                    }
+                },
+            )
+        task_id = uuid.uuid4().hex
+        with SessionLocal() as db:
+            db.add(
+                Task(
+                    id=task_id,
+                    title=req.title,
+                    input_text=req.input_text,
+                    analysis_type=req.analysis_type,
+                    project_id=req.project_id,
+                    mode="render",
+                    input_mode="markdown",
+                    search_enabled=False,
+                    web=False,
+                    status="queued",
+                )
+            )
+            db.commit()
+        return {"task_id": task_id}
     requested_engine = req.requested_engine or req.mode or "auto"
     try:
         decision = decide_generation_route(

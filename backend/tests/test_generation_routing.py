@@ -8,6 +8,7 @@ from app.generation_routing import GenerationRouteError, decide_generation_route
     [
         ("freeform", "auto", None, True, "llm", False),
         ("freeform", "llm", None, True, "llm", False),
+        ("freeform", "rule", None, True, "llm", False),
         ("structured", "auto", {"event": "事实"}, False, "rule", False),
         ("structured", "rule", {"event": "事实"}, False, "rule", False),
         ("structured", "llm", {"event": "事实"}, True, "llm", True),
@@ -25,21 +26,22 @@ def test_generation_route_matrix(
     )
 
     assert decision.input_mode == input_mode
-    assert decision.requested_engine == engine
+    assert decision.requested_engine == ("auto" if input_mode == "freeform" else engine)
     assert decision.selected_engine == selected
     assert decision.may_fallback_to_rule is fallback
 
 
-def test_freeform_rule_is_rejected_before_task_creation():
-    with pytest.raises(GenerationRouteError) as exc:
-        decide_generation_route(
-            input_mode="freeform",
-            requested_engine="rule",
-            structured=None,
-            llm_available=True,
-        )
+def test_freeform_rule_is_promoted_to_the_report_workflow():
+    decision = decide_generation_route(
+        input_mode="freeform",
+        requested_engine="rule",
+        structured=None,
+        llm_available=True,
+    )
 
-    assert exc.value.code == "freeform_requires_structured_input"
+    assert decision.requested_engine == "auto"
+    assert decision.selected_engine == "llm"
+    assert decision.may_fallback_to_rule is False
 
 
 @pytest.mark.parametrize("engine", ["auto", "llm"])
@@ -119,6 +121,31 @@ def test_api_persists_selected_llm_for_freeform_auto(client, monkeypatch):
     with SessionLocal() as db:
         task = db.get(Task, task_id)
         assert task.input_mode == "freeform"
+        assert task.requested_engine == "auto"
+        assert task.mode == "llm"
+
+
+def test_api_accepts_legacy_freeform_rule_request_and_uses_workflow(
+    client, monkeypatch
+):
+    from app.db import SessionLocal
+    from app.models import Task
+
+    monkeypatch.setattr("app.routers.analyze.llm_is_available", lambda: True)
+    response = client.post(
+        "/api/analyze",
+        json={
+            "title": "截图场景回归",
+            "input_text": "分析恋与深空制作人事件",
+            "analysis_type": "case",
+            "input_mode": "freeform",
+            "requested_engine": "rule",
+        },
+    )
+
+    assert response.status_code == 200
+    with SessionLocal() as db:
+        task = db.get(Task, response.json()["task_id"])
         assert task.requested_engine == "auto"
         assert task.mode == "llm"
 

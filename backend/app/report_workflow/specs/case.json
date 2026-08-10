@@ -1,0 +1,15 @@
+{
+  "analysis_type": "case",
+  "version": "1.0",
+  "diagram_viz": ["network"],
+  "sections": [
+    {"id": "case_facts", "title": "案例事实摘要", "purpose": "只呈现决定分析结论的已知事实与证据边界"},
+    {"id": "case_framework", "title": "分析框架说明", "purpose": "提出核心张力、核心命题与少量必要概念"},
+    {"id": "case_actors", "title": "利益主体识别", "purpose": "识别具体主体、筹码、诉求与受损面"},
+    {"id": "case_flows", "title": "利益动线与转化", "purpose": "解释资源、权力、叙事和制度如何流动与转化"},
+    {"id": "case_analysis", "title": "三元结构分析正文", "purpose": "用事实解释生存、繁衍与逆反机制"},
+    {"id": "case_institutions", "title": "制度与叙事作用", "purpose": "说明规则和叙事如何放大、固化或修正利益格局"},
+    {"id": "case_conclusion", "title": "结论与推导", "purpose": "汇总判断、条件和可能走向"},
+    {"id": "appendix", "title": "附录", "purpose": "列出可核验来源和必要说明"}
+  ]
+}

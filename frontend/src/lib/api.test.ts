@@ -16,7 +16,7 @@ describe("apiRequest error envelope", () => {
       },
     }), { status: 422, headers: { "Content-Type": "application/json" } })));
 
-    await expect(apiRequest("/api/analyze", { method: "POST" })).rejects.toMatchObject<Partial<ApiError>>({
+    await expect(apiRequest("/api/analyze", { method: "POST" })).rejects.toMatchObject({
       code: "invalid_structured_input",
       status: 422,
       phase: "input_validation",

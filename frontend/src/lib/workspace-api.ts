@@ -19,6 +19,7 @@ export async function createAnalysisTask(
       project_id: input.projectId ?? null,
       material_ids: input.materialIds,
       web: Boolean(input.web),
+      render_only: Boolean(input.renderOnly),
     }),
   }) as { task_id: string };
 }
@@ -69,6 +70,8 @@ interface TaskPollDto {
   error?: string | null;
   error_phase?: string | null;
   quality?: ReportQualityResult | null;
+  // 轮询端点 /poll 在 error 时把详情放在 data.message
+  data?: { message?: string; type?: string; phase?: string } | null;
 }
 
 const phases: TaskPhase[] = ["inspect", "search", "decompose", "network", "organize", "output"];
@@ -89,7 +92,7 @@ export function normalizeTaskPhase(value: string | undefined, status: TaskStatus
 }
 
 function normalizeErrorPhase(value: string | null | undefined): TaskErrorPhase | undefined {
-  if (value === "input_validation" || value === "quality_gate") return value;
+  if (value === "input_validation" || value === "quality_gate" || value === "evidence") return value;
   return value && phases.includes(value as TaskPhase) ? value as TaskPhase : undefined;
 }
 
@@ -129,12 +132,12 @@ function mapTask(item: TaskDto, poll: TaskPollDto): AnalysisTask {
     type: (item.analysis_type || "case") as AnalysisTask["type"],
     title: item.title,
     context: "",
-    engine: poll.engine_used === "llm" ? "llm" : "rule",
+    engine: poll.engine_used === "llm" ? "llm" : poll.engine_used === "render" ? "render" : "rule",
     materialIds: poll.material_ids ?? [],
     status,
     phase: normalizeTaskPhase(poll.phase, status),
     progress: status === "done" ? 100 : Math.max(0, Math.min(100, poll.progress_pct ?? 0)),
-    error: poll.error ?? item.error ?? undefined,
+    error: poll.error ?? poll.data?.message ?? item.error ?? undefined,
     errorPhase: normalizeErrorPhase(poll.error_phase ?? item.error_phase),
     quality: poll.quality ?? item.quality ?? undefined,
     createdAt: item.created_at ?? new Date(0).toISOString(),

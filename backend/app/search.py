@@ -26,7 +26,8 @@ from dataclasses import dataclass, field
 logger = logging.getLogger("search")
 
 # 单次搜索最大阻塞时长（秒）。worker 线程池里调用，超时即放弃并降级标记。
-SEARCH_TIMEOUT = 8
+# 国内 DuckDuckGo 常被墙，过长会让前端看起来"卡在补充外部线索"，故收紧到 6s。
+SEARCH_TIMEOUT = 6
 # 抓取单页超时（秒）
 FETCH_TIMEOUT = 12
 # 浏览器 UA（DDG HTML 对无 UA 请求容易限流）
@@ -164,16 +165,12 @@ def _search_duckduckgo(query: str, max_results: int) -> list[SearchHit]:
     超时 8s，重试 1 次；仍失败抛出异常由 search_web 统一降级标记。
     """
     url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
-    last_exc: Exception | None = None
-    for attempt in range(2):
-        try:
-            html = _http_get(url, timeout=SEARCH_TIMEOUT)
-            return _parse_ddg_html(html, max_results)
-        except Exception as e:  # noqa: BLE001
-            last_exc = e
-            if attempt == 0:
-                time.sleep(1.0)
-    raise last_exc  # type: ignore[misc]
+    try:
+        html = _http_get(url, timeout=SEARCH_TIMEOUT)
+        return _parse_ddg_html(html, max_results)
+    except Exception as e:  # noqa: BLE001
+        # 不重试：避免因网络墙导致的长阻塞让前端误判"卡死"；由调用方降级标记处理。
+        raise e
 
 
 def _search_bing(query: str, api_key: str, max_results: int) -> list[SearchHit]:

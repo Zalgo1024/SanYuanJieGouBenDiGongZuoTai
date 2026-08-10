@@ -10,6 +10,7 @@
 """
 import asyncio
 import logging
+import os
 import re
 import threading
 import time
@@ -142,6 +143,52 @@ def _classify_error(e: Exception, current_phase: str | None = None) -> tuple[str
     return e.__class__.__name__, cur
 
 
+def _render_direct(task_id: str, title: str, markdown: str) -> None:
+    """确定性渲染：把用户提供的 Markdown 直接交给内核导出 Word/PDF/利益关系网络。
+
+    不经过 LLM、不联网、不走生成器；结果写入 Task.result（含 markdown），
+    供报告版本接口自动播种 original 版本，复用展览/下载/版本机制。
+    """
+    from app.engine_bridge import export_report
+    from app.models import Task
+
+    _emit(task_id, "generating", phase="inspect", progress_pct=10)
+    try:
+        # 兜底：确保输出根目录存在（首次运行 backend/generated 可能尚未创建）
+        os.makedirs(settings.generated_dir, exist_ok=True)
+        out = export_report(title, markdown, output_dir=settings.generated_dir, slug=task_id)
+    except Exception as e:  # noqa: BLE001
+        err_msg = _safe_error_text(e)
+        with SessionLocal() as db:
+            t = db.get(Task, task_id)
+            if t is not None:
+                t.status = "error"
+                t.error = err_msg
+                t.error_type = e.__class__.__name__
+                t.error_phase = "output"
+                t.error_detail = err_msg
+                db.commit()
+        _emit(task_id, "error", {"message": err_msg, "type": e.__class__.__name__, "phase": "output"})
+        return
+
+    safe = {k: v for k, v in out.items() if k != "folder"}
+    safe["markdown"] = markdown
+    safe["engine_used"] = "render"
+    safe["title"] = title
+    with SessionLocal() as db:
+        t = db.get(Task, task_id)
+        if t is None:
+            return
+        t.status = "done"
+        t.phase = "output"
+        t.progress_pct = 100
+        t.result = safe
+        t.error = None
+        db.commit()
+        _auto_project_record(db, t, safe)
+    _emit(task_id, "done", safe, phase="output", progress_pct=100)
+
+
 def _process(task_id: str) -> None:
     """在线程池里执行单条任务的生成与导出，并把结果写回数据库。
 
@@ -169,7 +216,12 @@ def _process(task_id: str) -> None:
         llm_config = t.llm_config
         search_enabled = t.search_enabled  # None=自动 | True=强制 | False=跳过
         web = bool(t.web)  # T8：联网写报告
-        source_urls = t.source_urls or []  # T8：用户勾选白名单
+        source_urls = t.source_urls or []
+
+    # —— A 方案：确定性「直接渲染」分支（用户已写好正文，仅渲染，不调 LLM/不联网）——
+    if mode == "render":
+        _render_direct(task_id, title, input_text)
+        return  # T8：用户勾选白名单
 
     def _update_phase(phase: str, pct: int):
         """更新 DB 中的阶段字段并推送给 WS 订阅者；同时记录"当前已达阶段"。"""
@@ -227,9 +279,6 @@ def _process(task_id: str) -> None:
                     _update_phase("fetch", 18)
                     fetched = fetch_and_clean([h.url for h in hits[: settings.search_max_results]])
             bundle = materials.build_materials(hits, fetched, set())
-            mctx = materials.format_materials_context(bundle)
-            if mctx:
-                input_text = f"{input_text}\n\n{mctx}"
             # 结果落库（含 degraded，不静默），随 done 载荷推给前端
             # snippets 为旧前端兼容字段（旧 AnalysisEngine 读 search_results.snippets）
             with SessionLocal() as db:
@@ -271,6 +320,12 @@ def _process(task_id: str) -> None:
     _emit(task_id, "generating")
     try:
         # web 素材包（bundle 为 MaterialBundle；web_on 但无素材时仍传 web_mode=True 加引用约束）
+        # —— B 规则：AI 模式 + 联网 + 检索为空 → 拒绝生成空壳报告（E-001 类）——
+        if web_on and mode == "llm" and (bundle is None or not getattr(bundle, "sources", None)):
+            raise ValueError(
+                "未检索到与主题相关的公开素材，无法生成报告。"
+                "请：① 提供更具体的主题或来源链接；② 或在「直接撰写」模式直接粘贴你的分析正文。"
+            )
         bundle_dict = bundle.__dict__ if bundle is not None else None
         if mode == "rule":
             # 内置规则引擎：纯本地、不需要任何 LLM / key

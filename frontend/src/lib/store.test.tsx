@@ -58,7 +58,15 @@ describe("local frontend state", () => {
       settings: { theme: "dark", defaultEngine: "llm" },
     }));
 
-    expect(settings).toMatchObject({ theme: "dark", defaultEngine: "llm", defaultExport: "markdown" });
+    expect(settings).toMatchObject({ theme: "dark", defaultEngine: "auto", defaultExport: "markdown" });
+  });
+
+  it("migrates stale engine preferences to the single report workflow", () => {
+    const settings = parseStoredSettings(JSON.stringify({
+      settings: { defaultEngine: "rule", theme: "light" },
+    }));
+
+    expect(settings.defaultEngine).toBe("auto");
   });
 
   it("shows an offline state without loading demo data when backend hydration fails", async () => {

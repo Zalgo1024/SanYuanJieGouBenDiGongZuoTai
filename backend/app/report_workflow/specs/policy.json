@@ -1,0 +1,15 @@
+{
+  "analysis_type": "policy",
+  "version": "1.0",
+  "diagram_viz": ["network", "flow"],
+  "sections": [
+    {"id": "policy_facts", "title": "独立事实摘要", "purpose": "概括政策文本、发布主体、时间和适用范围"},
+    {"id": "policy_framework", "title": "分析框架说明", "purpose": "提出政策要解决的矛盾与核心命题"},
+    {"id": "policy_portrait", "title": "政策对象图谱", "purpose": "识别受影响主体及影响方向"},
+    {"id": "policy_space", "title": "政策权重与空间分析", "purpose": "判断约束强度、执行空间与地方差异"},
+    {"id": "policy_conflicts", "title": "核心冲突点", "purpose": "压缩政策执行中的关键主体张力"},
+    {"id": "policy_analysis", "title": "三元结构分析正文", "purpose": "解释政策如何改变生存、繁衍和逆反条件"},
+    {"id": "policy_conclusion", "title": "结论与推导", "purpose": "给出条件化判断、走向和行动含义"},
+    {"id": "appendix", "title": "附录/数据溯源", "purpose": "列出政策原文和可核验来源"}
+  ]
+}

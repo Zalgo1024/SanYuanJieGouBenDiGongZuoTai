@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant FE as 展览页 /report/[taskId]
+    participant BE as reports.py
+    participant G as generator.revise
+    participant L as LLM
+    participant EB as engine_bridge
+    participant K as 内核
+    participant DB as SQLite
+
+    U->>FE: 点击「AI 再改」+ 输入指令
+    FE->>BE: POST /api/reports/{taskId}/revise {instruction}
+    BE->>DB: 取当前版本 markdown + version_no
+    BE->>G: ReportGenerator(mode="llm", analysis_type=task.analysis_type).revise(prev_md, instruction, title)
+    G->>L: system(同类型骨架+哨兵护栏) + user(上一版+指令)
+    L-->>G: 新 Markdown
+    G->>G: contract 校验+修复（缺哨兵→重试1次→降级标注）
+    G->>EB: export_report(title, md, output_dir=generated, slug={taskId}_v{n+1})
+    EB->>K: export_from_text
+    K-->>EB: {word, pdf, diagrams}
+    G-->>BE: md
+    BE->>DB: 新增 ReportVersion(version_no=n+1, edited_by="ai", summary=指令, is_current=1)
+    BE->>DB: 旧版本 is_current=0；Task.result 更新为最新产物
+    BE-->>FE: {id, version_no, word, pdf, pdf_available}
+    FE->>FE: 正文切换 + 版本时间线刷新
+    U->>FE: 点击时间线 v1 →「回滚到该版本」
+    FE->>BE: POST /api/versions/{v1_id}/rollback
+    BE->>DB: v1.is_current=1；其余 is_current=0
+    BE->>EB: export_report(title, v1.content_markdown, slug={taskId}_v1)
+    EB->>K: export_from_text
+    K-->>EB: {word, pdf}
+    BE-->>FE: {ok, current_version_id, word, pdf, pdf_available}
+    FE->>FE: 正文与下载按钮切回 v1（历史版本不丢）

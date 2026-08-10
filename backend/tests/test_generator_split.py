@@ -6,6 +6,7 @@
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,8 @@ from app import rule_engine
 from app.generator import ReportGenerator
 from app.llm_client import MockClient
 from app.report_quality import ReportQualityError
+from app.report_quality import ReportQualityResult
+from app.report_workflow.runner import WorkflowQualityError
 
 FIX = Path(__file__).resolve().parent / "fixtures"
 
@@ -98,7 +101,7 @@ def test_freeform_llm_failure_never_degrades_to_rule(monkeypatch):
         gen.generate("分析这个事件", "自由输入报告")
 
 
-def test_structured_llm_failure_can_degrade_to_rule(monkeypatch):
+def test_structured_llm_failure_does_not_degrade_to_rule(monkeypatch):
     sample = _load("sample_event")
     structured = rule_engine.StructuredInput.model_validate(sample)
     monkeypatch.setattr(
@@ -111,11 +114,8 @@ def test_structured_llm_failure_can_degrade_to_rule(monkeypatch):
         structured=structured,
     )
 
-    markdown = gen.generate("", sample["title"])
-
-    assert markdown.startswith("# ")
-    assert gen.validate()["engine_used"] == "rule"
-    assert gen.validate()["degraded_from_llm"] is True
+    with pytest.raises(ValueError, match="语言模型"):
+        gen.generate("", sample["title"])
 
 
 def test_rule_generation_attaches_a_passing_quality_result():
@@ -141,7 +141,7 @@ def test_rule_generation_rejects_a_broken_template(monkeypatch):
         gen.generate(title=sample["title"])
 
 
-def test_llm_quality_failure_gets_at_most_two_targeted_revisions(monkeypatch):
+def test_one_shot_full_report_responses_are_rejected_by_staged_protocol(monkeypatch):
     sample = _load("sample_event")
     valid = rule_engine.generate(rule_engine.StructuredInput.model_validate(sample))
     invalid = valid.replace("图 1", "下图")
@@ -149,7 +149,7 @@ def test_llm_quality_failure_gets_at_most_two_targeted_revisions(monkeypatch):
     class SequenceLlm:
         def __init__(self):
             self.calls = []
-            self.responses = [invalid, invalid, valid]
+            self.responses = [invalid, valid]
 
         def generate(self, system, user, temperature=0.2):
             self.calls.append(user)
@@ -159,12 +159,11 @@ def test_llm_quality_failure_gets_at_most_two_targeted_revisions(monkeypatch):
     monkeypatch.setattr("app.llm_client.create_llm_from_config", lambda _config=None: llm)
     gen = ReportGenerator(None, analysis_type="case", mode="llm", structured=None)
 
-    markdown = gen.generate("分析这个事件", sample["title"])
+    with pytest.raises(ValueError, match="scope"):
+        gen.generate("分析这个事件", sample["title"])
 
-    assert markdown
-    assert len(llm.calls) == 3
-    assert "figure_reference" in llm.calls[1]
-    assert gen.quality().valid is True
+    assert len(llm.calls) == 2
+    assert "INVALID_JSON_BEGIN" in llm.calls[1]
 
 
 def test_ai_revise_also_runs_the_quality_revision_loop(monkeypatch):
@@ -191,3 +190,99 @@ def test_ai_revise_also_runs_the_quality_revision_loop(monkeypatch):
     assert len(llm.calls) == 2
     assert "figure_reference" in llm.calls[1]
     assert gen.quality().valid is True
+
+
+def test_llm_generation_delegates_to_the_staged_workflow(monkeypatch, tmp_path):
+    captured = {}
+    sentinel_llm = object()
+    markdown = """# 分阶段报告
+
+## 案例事实摘要
+事实。
+## 分析框架说明
+命题。
+## 利益主体识别
+主体。
+## 利益动线与转化
+动线。
+## 三元结构分析正文
+分析。
+## 制度与叙事作用
+机制。
+## 结论与推导
+结论。
+```DIAGRAM
+{"viz":"network","title":"关系图","nodes":[{"id":"a","label":"甲","type":"actor"},{"id":"b","label":"乙","type":"actor"}],"edges":[{"source":"a","target":"b","label":"影响","type":"power"}]}
+```
+## 附录
+1. [来源](https://example.com)
+
+分析框架：三元结构理论 © 2026, CC BY-NC-SA 4.0，国作登字-2026-A-00048134
+"""
+
+    class FakeWorkflow:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def run(self, input_text, title):
+            captured["input_text"] = input_text
+            captured["title"] = title
+            return SimpleNamespace(
+                markdown=markdown,
+                diagram={"viz": "network", "nodes": [], "edges": []},
+                quality=ReportQualityResult(valid=True, score=100, issues=[]),
+                spec_version="1.0",
+            )
+
+    monkeypatch.setattr("app.generator.ReportWorkflow", FakeWorkflow)
+    gen = ReportGenerator(
+        sentinel_llm,
+        analysis_type="case",
+        mode="llm",
+        materials={"items": [], "sources": []},
+        artifact_root=tmp_path / "work",
+    )
+
+    result = gen.generate("分析这个事件", "分阶段报告")
+
+    assert result == markdown
+    assert captured["llm"] is sentinel_llm
+    assert captured["analysis_type"] == "case"
+    assert captured["artifact_root"] == tmp_path / "work"
+    assert captured["input_text"] == "分析这个事件"
+    assert gen.validate()["engine_used"] == "llm"
+    assert gen.quality().valid is True
+
+
+def test_staged_quality_failure_keeps_structured_quality_result(monkeypatch, tmp_path):
+    quality = ReportQualityResult(
+        valid=False,
+        score=75,
+        issues=[
+            {
+                "code": "missing_sections",
+                "severity": "error",
+                "message": "缺少必要章节",
+            }
+        ],
+    )
+
+    class FailingWorkflow:
+        def __init__(self, **_kwargs):
+            pass
+
+        def run(self, _input_text, _title):
+            raise WorkflowQualityError(quality)
+
+    monkeypatch.setattr("app.generator.ReportWorkflow", FailingWorkflow)
+    gen = ReportGenerator(
+        object(),
+        analysis_type="case",
+        mode="llm",
+        artifact_root=tmp_path / "work",
+    )
+
+    with pytest.raises(ReportQualityError) as exc_info:
+        gen.generate("分析这个事件", "测试报告")
+
+    assert exc_info.value.result == quality

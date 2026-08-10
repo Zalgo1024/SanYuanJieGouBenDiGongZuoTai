@@ -1,0 +1,15 @@
+{
+  "analysis_type": "opinion",
+  "version": "1.0",
+  "diagram_viz": ["network", "flow"],
+  "sections": [
+    {"id": "opinion_event", "title": "事件与时间线", "purpose": "呈现触发、发酵、扩散和回应的已知节点"},
+    {"id": "opinion_actors", "title": "利益主体与沉默方", "purpose": "识别发声者、议程设置者、被代表者和沉默方"},
+    {"id": "opinion_narrative", "title": "叙事竞争矩阵", "purpose": "比较核心叙事、服务利益和定义权"},
+    {"id": "opinion_trilife", "title": "三元生命维度", "purpose": "解释舆论的生存、繁衍和逆反机制"},
+    {"id": "opinion_reverse", "title": "逆反性质与层级", "purpose": "判断逆反性质、层级和错位传导"},
+    {"id": "opinion_evolution", "title": "演化曲线与系统回应", "purpose": "判断当前节点、回应回路和相变条件"},
+    {"id": "opinion_conclusion", "title": "核心判断", "purpose": "汇总利益格局、系统状态和条件化走向"},
+    {"id": "appendix", "title": "附录", "purpose": "列出可核验来源和数据边界"}
+  ]
+}

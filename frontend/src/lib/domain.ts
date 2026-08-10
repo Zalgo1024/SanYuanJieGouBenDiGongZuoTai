@@ -1,9 +1,9 @@
 export type AnalysisType = "case" | "policy" | "org" | "opinion" | "combo";
-export type EngineMode = "auto" | "rule" | "llm";
+export type EngineMode = "auto" | "rule" | "llm" | "render";
 export type InputMode = "freeform" | "structured";
 export type TaskStatus = "queued" | "generating" | "done" | "error";
 export type TaskPhase = "inspect" | "search" | "decompose" | "network" | "organize" | "output";
-export type TaskErrorPhase = TaskPhase | "input_validation" | "quality_gate";
+export type TaskErrorPhase = TaskPhase | "input_validation" | "quality_gate" | "evidence";
 export type ProjectStatus = "active" | "review" | "archived";
 export type MaterialKind = "file" | "link" | "note";
 export type MaterialStatus = "pending" | "ready" | "error";
@@ -20,6 +20,8 @@ export interface NewAnalysisInput {
   projectId?: string;
   /** 是否开启联网检索撰写（映射到后端 /api/analyze 的 web 字段） */
   web?: boolean;
+  /** 直接撰写模式：用户已写好正文，仅确定性渲染（不调 LLM/不联网） */
+  renderOnly?: boolean;
 }
 
 export interface ProjectSummary {

@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Check, FileText, RefreshCw } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowRight, Check, FileText, RefreshCw, RotateCcw, Plus } from "lucide-react";
 import React, { useEffect, useState } from "react";
+import type { EngineMode } from "@/lib/domain";
 import { analysisTypes, phaseLabels } from "@/lib/domain";
 import { useAppStore } from "@/lib/store";
 import { useTaskProgress } from "@/lib/realtime";
@@ -11,9 +13,21 @@ import { TaskReportPreview } from "@/components/task-report-preview";
 
 type View = "overview" | "report" | "network";
 
+function engineLabel(engine: EngineMode): string {
+  switch (engine) {
+    case "llm": return "语言模型";
+    case "render": return "直接撰写";
+    case "rule": return "规则引擎";
+    case "auto": return "自动选择";
+    default: return "规则引擎";
+  }
+}
+
 export function TaskWorkbench({ taskId }: { taskId: string }) {
   const [view, setView] = useState<View>("overview");
-  const { state, hydrated, connection, loadTask, loadReport } = useAppStore();
+  const [retrying, setRetrying] = useState(false);
+  const router = useRouter();
+  const { state, hydrated, connection, loadTask, loadReport, retryTask } = useAppStore();
   const task = state.tasks.find((item) => item.id === taskId);
 
   useTaskProgress(taskId, connection !== "demo");
@@ -65,7 +79,9 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
     ? "报告质量校验"
     : task.errorPhase === "input_validation"
       ? "输入校验"
-      : phaseLabels.find((phase) => phase.id === task.errorPhase)?.label;
+      : task.errorPhase === "evidence"
+        ? "证据整理"
+        : phaseLabels.find((phase) => phase.id === task.errorPhase)?.label;
   const statusText = task.status === "done"
     ? linkedReport ? "任务已完成，后端当前报告版本已同步。" : "任务已完成，正在同步后端当前报告版本。"
     : task.status === "error"
@@ -76,7 +92,7 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
     <section className="task-workbench">
       <header className="task-workbench__header">
         <div>
-          <span className="eyebrow">{typeLabel} / {task.engine === "llm" ? "语言模型" : "规则引擎"}</span>
+          <span className="eyebrow">{typeLabel} / {engineLabel(task.engine)}</span>
           <h1>{task.title}</h1>
           <p>{task.context || "该任务未填写补充背景，分析范围以后端收到的题目和素材为准。"}</p>
         </div>
@@ -95,7 +111,7 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
         <div className="workbench-overview">
           <section className="phase-panel">
             <div className="section-title">
-              <div><span className="eyebrow">分析链</span><h2>六步进度</h2></div>
+              <div><span className="eyebrow">分析进度</span><h2>后端执行进度</h2></div>
               <strong>{task.progress}%</strong>
             </div>
             <ol>
@@ -135,6 +151,23 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
                 <Link className="text-action" href={`/reports/${linkedReport.id}`}>阅读当前报告 <ArrowRight size={15} /></Link>
               ) : task.status === "done" ? (
                 <button className="text-action" type="button" onClick={() => void loadReport(task.id)}><RefreshCw size={15} />重新同步报告</button>
+              ) : task.status === "error" ? (
+                <>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={retrying}
+                    onClick={async () => {
+                      setRetrying(true);
+                      const newId = await retryTask(task.id);
+                      setRetrying(false);
+                      if (newId) router.push(`/analysis/${newId}`);
+                    }}
+                  >
+                    <RotateCcw size={16} />{retrying ? "正在重试..." : "重试分析"}
+                  </button>
+                  <Link className="secondary-button" href="/analysis"><Plus size={16} />新建分析</Link>
+                </>
               ) : running ? (
                 <span className="task-run-status" role="status">等待后端生成结构化报告</span>
               ) : null}
@@ -144,7 +177,7 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
           <aside className="actor-panel">
             <span className="eyebrow">任务元数据</span>
             <div className="task-metadata-row"><strong>分析类型</strong><span>{typeLabel}</span></div>
-            <div className="task-metadata-row"><strong>执行引擎</strong><span>{task.engine === "llm" ? "语言模型" : "规则引擎"}</span></div>
+            <div className="task-metadata-row"><strong>执行引擎</strong><span>{engineLabel(task.engine)}</span></div>
             <div className="task-metadata-row"><strong>报告版本</strong><span>{linkedReport ? `v${linkedReport.version}` : "尚未生成"}</span></div>
           </aside>
         </div>

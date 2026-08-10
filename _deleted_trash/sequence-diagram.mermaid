@@ -1,0 +1,41 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant FE as 前端 AnalysisEngine
+    participant BE as 后端 routers
+    participant Q as queue._process
+    participant S as search.py
+    participant M as materials.py
+    participant G as generator.py
+    participant L as LLM
+    participant EB as engine_bridge
+    participant K as 内核 engine
+
+    U->>FE: 输入关键词 + 选类型(org) + 联网开
+    FE->>BE: POST /api/search/preview {query}
+    BE->>S: search_web(query)  [DDG 零 Key]
+    S-->>BE: SearchResult{hits}
+    BE-->>FE: {hits} 来源预览列表
+    U->>FE: 勾选/剔除来源 → source_urls
+    FE->>BE: POST /api/analyze {web:true, source_urls, analysis_type:"org", mode:"llm"}
+    BE-->>FE: {task_id}
+    loop WS 进度通道 /ws/progress/{task_id}
+        Q->>Q: _update_phase(inspect→search→decompose→…)
+        Q-->>FE: {phase, progress_pct}
+    end
+    Q->>S: fetch_and_clean(source_urls)
+    S-->>Q: fetched[{title,url,text}]
+    Q->>M: build_materials(hits, fetched, excluded)
+    M-->>Q: MaterialBundle{items, sources}
+    Q->>G: ReportGenerator(web_mode=True, analysis_type="org").generate(input_text+materials, title)
+    G->>L: system(org 骨架+哨兵护栏+强制[名](url)) + user(素材块)
+    L-->>G: Markdown(含 ## 组织画像… + 附录[名](url))
+    G->>G: contract.validate_and_repair(哨兵后校验)
+    G->>EB: export_report(title, md, output_dir=generated, slug=task_id)
+    EB->>K: CaseAnalysisEngine().export_from_text(title, md, output_dir, slug)
+    K-->>EB: {word, pdf, diagrams}
+    EB-->>G: exp
+    G-->>Q: {markdown, word, pdf, diagrams, sources}
+    Q->>Q: Task.result 落库 + search_results + 自动项目记录
+    Q-->>FE: ws done {data}
+    FE->>FE: router.push(/report/{task_id})

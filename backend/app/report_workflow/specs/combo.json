@@ -1,0 +1,18 @@
+{
+  "analysis_type": "combo",
+  "version": "1.0",
+  "diagram_viz": ["network", "org", "flow"],
+  "sections": [
+    {"id": "combo_facts", "title": "事实与分析范围", "purpose": "统一不同分析模式共享的事实和边界"},
+    {"id": "combo_framework", "title": "分析框架说明", "purpose": "说明组合模式、核心命题和章节关系"},
+    {"id": "opinion_event", "title": "事件与时间线", "purpose": "需要舆情或事件视角时呈现关键节点与演化", "required": false},
+    {"id": "policy_portrait", "title": "政策对象图谱", "purpose": "需要政策视角时识别政策对象、权重和执行空间", "required": false},
+    {"id": "org_portrait", "title": "组织画像", "purpose": "需要组织视角时界定组织性质、边界和环境", "required": false},
+    {"id": "case_actors", "title": "利益主体识别", "purpose": "需要事件视角时识别具体主体、筹码和诉求", "required": false},
+    {"id": "opinion_narrative", "title": "叙事竞争矩阵", "purpose": "需要舆情视角时比较核心叙事与定义权", "required": false},
+    {"id": "combo_actors", "title": "利益主体与关系", "purpose": "识别跨模式主体、利益和关系"},
+    {"id": "combo_analysis", "title": "三元结构分析正文", "purpose": "按源序融合事件、政策、组织或舆情分析"},
+    {"id": "combo_conclusion", "title": "结论与推导", "purpose": "汇总跨模式判断和条件化走向"},
+    {"id": "appendix", "title": "附录", "purpose": "列出可核验来源和分析边界"}
+  ]
+}

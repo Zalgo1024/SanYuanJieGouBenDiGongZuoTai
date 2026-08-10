@@ -1,0 +1,106 @@
+classDiagram
+    class Task {
+        +str id
+        +str title
+        +str input_text
+        +str analysis_type
+        +str status
+        +str mode
+        +JSON result
+        +str project_id
+        +bool web
+        +JSON source_urls
+        +JSON search_results
+        +str llm_model
+        +datetime created_at
+    }
+    class Project {
+        +str id
+        +str name
+        +str status
+        +str subjects
+        +str interests
+        +str chapters
+        +str progress
+        +str owner_id
+    }
+    class ReportVersion {
+        +str id
+        +str task_id
+        +int version_no
+        +str kind
+        +str edited_by
+        +str summary
+        +str content_markdown
+        +str content_html
+        +bool is_current
+        +datetime created_at
+    }
+    class Material {
+        +str id
+        +str title
+        +str content_text
+        +str source
+        +str source_type
+        +str project_id
+    }
+    class SearchService {
+        +search_web(query, max_results) SearchResult
+        +fetch_and_clean(urls, max_chars) list
+        +dedupe_hits(hits) list
+        +clean_text(html, url) str
+    }
+    class MaterialBuilder {
+        +build_materials(hits, fetched, excluded_urls) MaterialBundle
+        +format_materials_context(bundle) str
+        +format_source_appendix(sources) str
+    }
+    class ReportGenerator {
+        +str analysis_type
+        +str mode
+        +bool web_mode
+        +generate(input_text, title) str
+        +revise(previous_md, instruction, title) str
+        +export(markdown, title, output_dir, slug) dict
+        +generate_and_export(input_text, title, output_dir, slug, on_phase) dict
+    }
+    class PromptBuilder {
+        +build_system_prompt(analysis_type) str
+    }
+    class ContractValidator {
+        +validate_and_repair(md, analysis_type, structured) tuple
+        +_count_sentinel_modes(md) int
+    }
+    class TasksAPI {
+        +GET /api/tasks
+    }
+    class ReportsAPI {
+        +GET /api/reports/id
+        +POST /api/reports/id/versions
+        +POST /api/reports/id/revise
+        +POST /api/versions/vid/rollback
+        +GET /api/download/task_id
+    }
+    class CasesAPI {
+        +GET /api/cases
+        +POST /api/cases/id/import
+    }
+    class SearchAPI {
+        +POST /api/search/preview
+    }
+    class EngineBridge {
+        +export_report(title, markdown, output_dir, slug) dict
+    }
+
+    Task "1" --> "0..*" ReportVersion : versions
+    Project "1" --> "0..*" Task : tasks
+    Project "1" --> "0..*" Material : materials
+    SearchService ..> MaterialBuilder : hits
+    MaterialBuilder ..> ReportGenerator : materials
+    ReportGenerator --> PromptBuilder : system
+    ReportGenerator --> ContractValidator : 护栏后校验
+    ReportGenerator ..> EngineBridge : export
+    TasksAPI --> Task
+    ReportsAPI --> ReportVersion
+    CasesAPI ..> KERNEL_cases : ast 只读解析
+    SearchAPI ..> SearchService

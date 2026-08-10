@@ -37,19 +37,18 @@ def decide_generation_route(
     )
 
     if resolved_input == "freeform":
-        if resolved_engine == "rule":
-            raise GenerationRouteError(
-                "freeform_requires_structured_input",
-                "自由输入不能由规则引擎猜测事实，请切换为结构化录入。",
-            )
+        # 自由输入必须由 LLM 拆解（规则引擎只吃结构化要素，无法处理自由文本）。
+        # 因此 freeform + rule 也一律提升为 llm 工作流（保持 legacy 兼容，避免静默空报告）。
         if not llm_available:
             raise GenerationRouteError(
                 "freeform_requires_llm",
-                "自由输入需要可用的语言模型，或切换为结构化录入。",
+                "「AI 辅助」模式需要先配置可用的语言模型：请到设置页填写 API Key"
+                "（默认 DeepSeek，也可填 OpenAI 兼容地址）。配置后即可联网检索并拆解你的输入。"
+                "若暂时不想配 Key，可改用「直接撰写」模式自己粘贴已写好的正文。",
             )
         return GenerationDecision(
             input_mode="freeform",
-            requested_engine=resolved_engine,
+            requested_engine="auto",
             selected_engine="llm",
             may_fallback_to_rule=False,
         )

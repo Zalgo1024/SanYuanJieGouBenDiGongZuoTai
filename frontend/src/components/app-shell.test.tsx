@@ -48,4 +48,11 @@ describe("AppShell backend status", () => {
     expect(navigation).not.toHaveTextContent("报告");
     expect(navigation).not.toHaveTextContent("利益拆解");
   });
+
+  it("describes the single report workflow instead of an engine preference", () => {
+    render(<AppShell><div>工作区内容</div></AppShell>);
+
+    expect(screen.getByText("报告工作流已就绪")).toBeInTheDocument();
+    expect(screen.queryByText(/规则引擎已就绪/)).not.toBeInTheDocument();
+  });
 });

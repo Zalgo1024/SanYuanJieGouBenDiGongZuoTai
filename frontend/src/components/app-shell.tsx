@@ -28,13 +28,8 @@ function isActive(pathname: string, href: string) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { state, connection, connectionError, refreshWorkspace } = useAppStore();
+  const { connection, connectionError, refreshWorkspace } = useAppStore();
   const [profileOpen, setProfileOpen] = useState(false);
-  const engineLabel = state.settings.defaultEngine === "auto"
-    ? "自动路由已就绪"
-    : state.settings.defaultEngine === "llm"
-      ? "语言增强已就绪"
-      : "规则引擎已就绪";
 
   return (
     <main className="app-shell">
@@ -55,7 +50,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <div className="app-sidebar__footer">
-          <div className="app-engine-status"><Sparkles size={15} /><span>{engineLabel}</span></div>
+          <div className="app-engine-status"><Sparkles size={15} /><span>报告工作流已就绪</span></div>
           <div className="app-profile-wrap">
             <button
               className="app-profile"

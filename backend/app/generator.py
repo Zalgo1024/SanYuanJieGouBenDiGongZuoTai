@@ -10,10 +10,17 @@ LLM 客户端可替换（DeepSeek / OpenAI / Mock），generator 本身不关心
 """
 import os
 import re
+import tempfile
+from pathlib import Path
 
 from app.prompt_builder import build_system_prompt
 from app.engine_bridge import export_report
 from app import rule_engine
+from app.report_workflow.runner import (
+    ReportWorkflow,
+    WorkflowError,
+    WorkflowQualityError,
+)
 from app.report_quality import (
     ReportQualityError,
     ReportQualityResult,
@@ -38,6 +45,7 @@ class ReportGenerator:
         llm_config: dict | None = None,
         web_mode: bool = False,
         materials: dict | None = None,
+        artifact_root: str | Path | None = None,
     ) -> None:
         self.llm = llm
         self.analysis_type = analysis_type
@@ -47,6 +55,9 @@ class ReportGenerator:
         # T3：联网写报告模式（素材注入 + 强制 [名称](url) 附录约束）
         self.web_mode = web_mode
         self.materials = materials
+        self.artifact_root = Path(artifact_root) if artifact_root is not None else None
+        self._workflow_on_phase = None
+        self._temporary_artifacts = None
 
     @staticmethod
     def _coerce_bundle(materials):
@@ -195,88 +206,66 @@ class ReportGenerator:
             }
             return md
 
-        # —— LLM 增强模式 ——
+        # —— 固定的分阶段 LLM 报告工作流 ——
         from app.contract import validate_and_repair
         from app.llm_client import create_llm_from_config, MockClient
         from app.llm_settings_store import resolve_config
-        from app.prompt_builder import PROMPT_VERSION
 
         cfg = resolve_config(self.llm_config)
-        llm = create_llm_from_config(self.llm_config)
-
-        # 无可用密钥 → 没有 LLM 可用，直接降级到规则引擎（核心不依赖 LLM）
+        llm = self.llm or create_llm_from_config(self.llm_config)
         if isinstance(llm, MockClient):
-            reason = (
-                "未配置 LLM 密钥（请到设置页填写，或用 backend/.env 配置），已使用规则引擎"
+            raise ValueError(
+                "自由输入未配置可用的语言模型，正式报告工作流无法启动。"
+                "请先在设置页配置模型。"
             )
-            return self._fallback_or_raise(input_text, title, reason)
 
-        system = build_system_prompt(self.analysis_type)
-        user = self._build_user_prompt(input_text, title, self.materials)
+        if self.artifact_root is None:
+            self._temporary_artifacts = tempfile.TemporaryDirectory(
+                prefix="triad-report-workflow-"
+            )
+            artifact_root = Path(self._temporary_artifacts.name)
+        else:
+            artifact_root = self.artifact_root
+
+        workflow = ReportWorkflow(
+            llm=llm,
+            analysis_type=self.analysis_type,
+            artifact_root=artifact_root,
+            materials=self.materials,
+            temperature=cfg["temperature"],
+            on_phase=self._workflow_on_phase,
+        )
         try:
-            raw = llm.generate(system, user, temperature=cfg["temperature"])
-        except Exception as e:  # noqa: BLE001
-            # LLMError（限流/鉴权/余额/超时/连接）或任何调用异常 → 降级
-            msg = getattr(e, "message", None) or str(e)
-            return self._fallback_or_raise(
-                input_text, title, f"LLM 调用失败：{msg}"
-            )
-        candidate_raw = raw
-        contract = None
-        quality = None
-        md = ""
-        for attempt in range(3):
-            md = self._normalize(candidate_raw, title)
-            md, contract = validate_and_repair(
-                md, self.analysis_type, self.structured
-            )
-            if not contract.get("degrade"):
-                quality = self._evaluate_quality(md)
-                if quality.valid:
-                    break
-            if attempt >= 2:
-                if contract.get("degrade"):
-                    reason = "LLM 输出连续三次不符合结构契约，无法形成正式报告"
-                    return self._fallback_or_raise(
-                        input_text, title, reason, raw=candidate_raw
-                    )
-                raise ReportQualityError(quality)
-            if contract.get("degrade"):
-                problems = "\n".join(f"- {error}" for error in contract.get("errors", []))
-                revision_user = (
-                    "以下报告不符合结构契约，请修复列出的问题并返回完整 Markdown。\n\n"
-                    f"契约问题：\n{problems}\n\n待修订报告：\n\n{md}"
-                )
-            else:
-                revision_user = self._quality_revision_prompt(md, quality)
-            try:
-                candidate_raw = llm.generate(
-                    system,
-                    revision_user,
-                    temperature=min(cfg["temperature"] + 0.1 * (attempt + 1), 1.0),
-                )
-            except Exception as exc:  # noqa: BLE001
-                msg = getattr(exc, "message", None) or str(exc)
-                return self._fallback_or_raise(
-                    input_text, title, f"LLM 定向修订失败：{msg}", raw=candidate_raw
-                )
+            result = workflow.run(input_text, title or "未命名报告")
+        except WorkflowQualityError as exc:
+            raise ReportQualityError(exc.result) from exc
+        except WorkflowError as exc:
+            raise ValueError(str(exc)) from exc
 
-        # LLM 成功且契约可用
+        md, contract = validate_and_repair(
+            result.markdown,
+            self.analysis_type,
+            self.structured,
+        )
+        if contract.get("degrade"):
+            raise ValueError("分阶段工作流产物未通过结构契约：" + "；".join(contract["errors"]))
+
         contract["mode"] = "llm"
         contract["engine_used"] = "llm"
         contract["degraded_from_llm"] = False
         contract["degrade_reason"] = None
-        contract["prompt_version"] = cfg["prompt_version"]
-        contract["quality"] = quality.model_dump()
+        contract["prompt_version"] = f"workflow-{result.spec_version}"
+        contract["quality"] = result.quality.model_dump()
         self._last_contract = contract
+        self._last_quality = result.quality
         self._engine_meta = {
             "engine_used": "llm",
             "llm_model": cfg["model"],
             "llm_temperature": cfg["temperature"],
-            "prompt_version": cfg["prompt_version"],
+            "prompt_version": f"workflow-{result.spec_version}",
             "degraded_from_llm": False,
             "degrade_reason": None,
-            "raw_response": _truncate(raw),
+            "raw_response": None,
         }
         return md
 
@@ -553,11 +542,18 @@ class ReportGenerator:
                 except Exception:  # noqa: BLE001
                     pass
 
-        _safe_phase("decompose", 25)
-        md = self.generate(input_text, title)
-        _safe_phase("network", 55)
+        if self.mode == "llm":
+            if self.artifact_root is None and output_dir and slug:
+                self.artifact_root = Path(output_dir) / slug / "work"
+            self._workflow_on_phase = _safe_phase
+            md = self.generate(input_text, title)
+        else:
+            _safe_phase("decompose", 25)
+            md = self.generate(input_text, title)
+            _safe_phase("network", 55)
         network = self.extract_network(md)
-        _safe_phase("organize", 75)
+        if self.mode != "llm":
+            _safe_phase("organize", 75)
         contract = self.validate(md, title)
         quality = self.quality()
         _safe_phase("output", 85)

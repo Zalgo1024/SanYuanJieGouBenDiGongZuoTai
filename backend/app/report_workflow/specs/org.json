@@ -1,0 +1,16 @@
+{
+  "analysis_type": "org",
+  "version": "1.0",
+  "diagram_viz": ["org", "network", "flow"],
+  "sections": [
+    {"id": "org_portrait", "title": "组织画像", "purpose": "界定组织性质、规模、环境和证据边界"},
+    {"id": "org_structure", "title": "架构拆解与资金来源", "purpose": "拆解控制链、权力拓扑、资金来源和依赖"},
+    {"id": "org_survival", "title": "生存诊断", "purpose": "分析现金流、市场、供应链和瓶颈控制"},
+    {"id": "org_reproduction", "title": "繁衍诊断", "purpose": "分析模式复制、文化传递和代际延续"},
+    {"id": "org_interest_network", "title": "利益关系网络与利益集团拆解", "purpose": "识别内部集团、外部联盟和主导意志"},
+    {"id": "org_reverse", "title": "逆反诊断", "purpose": "识别内外部逆反信号、层级和系统回应"},
+    {"id": "org_transformation", "title": "利益转化与组织—社会关系", "purpose": "分析利益转化、外部性和组织社会平衡"},
+    {"id": "org_conclusion", "title": "诊断结论", "purpose": "给出成熟度、病灶、风险和干预窗口"},
+    {"id": "appendix", "title": "附录", "purpose": "列出可核验来源和推断边界"}
+  ]
+}

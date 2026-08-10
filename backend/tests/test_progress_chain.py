@@ -495,3 +495,77 @@ def test_quality_gate_failure_is_persisted_with_its_own_phase(
             for issue in task.quality_result["issues"]
         )
     assert any(item.get("status") == "error" for item in coll.items)
+
+
+def test_web_materials_are_not_appended_to_the_user_input(
+    client, subbed, monkeypatch
+):
+    import app.queue as queue
+    from app.search import SearchHit, SearchResult
+
+    captured = {}
+
+    class FakeGenerator:
+        def __init__(self, llm, **kwargs):
+            captured["materials"] = kwargs.get("materials")
+
+        def generate_and_export(
+            self, input_text, title, output_dir, slug=None, on_phase=None
+        ):
+            captured["input_text"] = input_text
+            for phase, pct in (
+                ("decompose", 25),
+                ("network", 55),
+                ("organize", 75),
+                ("output", 85),
+            ):
+                on_phase(phase, pct)
+            return {
+                "markdown": "# 测试报告",
+                "network": {"nodes": [], "edges": []},
+                "engine_used": "llm",
+            }
+
+    monkeypatch.setattr(queue, "ReportGenerator", FakeGenerator)
+    monkeypatch.setattr("app.llm_client.create_llm_from_config", lambda config: object())
+    monkeypatch.setattr(
+        "app.search.search_web",
+        lambda q, max_results=5: SearchResult(
+            query=q,
+            hits=[
+                SearchHit(
+                    title="材料标题",
+                    url="https://example.com/source",
+                    snippet="MATERIAL-SNIPPET",
+                )
+            ],
+            provider="duckduckgo",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.search.fetch_and_clean",
+        lambda urls, max_chars=8000: [
+            {
+                "title": "材料标题",
+                "url": "https://example.com/source",
+                "text": "MATERIAL-BODY",
+                "snippet": "MATERIAL-SNIPPET",
+            }
+        ],
+    )
+
+    original = "只分析这个问题"
+    tid = _insert_task(
+        input_text=original,
+        mode="llm",
+        input_mode="freeform",
+        requested_engine="llm",
+        web=True,
+        structured=None,
+    )
+    subbed(tid)
+    errs = _run(tid)
+
+    assert not errs
+    assert captured["input_text"] == original
+    assert captured["materials"]["items"]

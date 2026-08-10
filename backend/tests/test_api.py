@@ -100,7 +100,7 @@ def test_config_persist(client):
     assert r.json()["engine_mode"] == "llm"
 
     # 复位，避免影响其他测试
-    client.post("/api/settings/config", json={"engine_mode": "rule", "notify_on_done": True})
+    client.post("/api/settings/config", json={"engine_mode": "auto", "notify_on_done": True})
 
 
 def _poll_done(client, tid, timeout=90):

@@ -48,7 +48,8 @@ def list_tasks(
                 "created_at": t.created_at.isoformat() if t.created_at else None,
                 "phase": t.phase,
                 "progress_pct": t.progress_pct,
-                "engine_used": (t.result or {}).get("engine_used") if isinstance(t.result, dict) else None,
+                # 执行中任务 result 为空，必须用 Task.mode 兜底，否则前端永远误显示「规则引擎」
+                "engine_used": ((t.result or {}).get("engine_used") if isinstance(t.result, dict) else None) or t.mode or None,
                 "material_ids": t.material_ids,
                 "error": t.error if t.status == "error" else None,
                 "error_phase": t.error_phase if t.status == "error" else None,
