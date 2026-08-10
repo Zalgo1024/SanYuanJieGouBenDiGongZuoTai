@@ -243,20 +243,19 @@ def _set_auto_update_fields(docx_path: str) -> None:
         raise
 
     # 落位：覆盖写 docx。
-    # shutil.move 在 Windows 上若目标已存在会回退为 copyfile(覆盖 docx)+unlink(tmp)；
-    # 沙箱对 os.unlink 有安全拦截（tmp 会被送回收站且可能 fail-closed）。这里改为显式
-    # copyfile 覆盖 docx，并忽略 tmp 的清理异常（tmp 为临时文件，残留无害），确保
-    # docx 内容正确落位且不因临时文件清理失败而中断流程。真机环境无此 shim，行为一致。
-    import os
+    # 不走 shutil.move —— 当目标 docx 已存在时，shutil.move 内部回退为
+    # copyfile(覆盖 docx) + os.unlink(tmp)；沙箱里 os.unlink 被 safe-delete shim
+    # 拦截，trash 操作即便报错也可能已"触碰" tmp 文件；最终抛 OSError 让我们以为
+    # shutil.move 失败，转去 shutil.copyfile(tmp, docx) 兜底时 tmp 已不可读，整条
+    # 落位链崩掉（FileNotFoundError）。改为显式 copyfile 覆盖 docx，tmp 用 best-effort
+    # 清理，残留无害。真机无 shim，行为一致。
     import shutil
+    shutil.copyfile(tmp_path, docx_path)
     try:
-        shutil.move(tmp_path, docx_path)
-    except Exception:  # noqa: BLE001
-        shutil.copyfile(tmp_path, docx_path)
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        os.unlink(tmp_path)
+    except OSError:
+        # tmp 是临时文件, 残留无害, 不要因为清理失败打断主流程
+        pass
 
 
 # ── 页面设置 ──────────────────────────────────────────────
