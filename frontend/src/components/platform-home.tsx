@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { ArrowRight, FileText, FolderKanban, Layers3, Library, Plus } from "lucide-react";
+import { ArrowRight, Layers3, LayoutGrid, Plus, Settings } from "lucide-react";
 import React from "react";
 
 const utilityEntrances = [
-  { label: "项目", detail: "查看进行中的判断链", href: "/projects", icon: FolderKanban },
-  { label: "材料库", detail: "管理来源与证据", href: "/materials", icon: Library },
-  { label: "报告", detail: "阅读、复核与修订", href: "/reports", icon: FileText },
+  { label: "工作台", detail: "项目、任务与报告总览", href: "/dashboard", icon: LayoutGrid },
+  { label: "新建分析", detail: "输入问题并添加材料", href: "/analysis", icon: Plus },
+  { label: "设置", detail: "配置本机分析偏好", href: "/settings", icon: Settings },
 ];
 
 export function PlatformHome() {

@@ -15,6 +15,11 @@ from pydantic import BaseModel
 from app.db import SessionLocal
 from app.generator import ReportGenerator
 from app.models import Project, ReportVersion, Task
+from app.report_version_service import (
+    create_report_version,
+    ensure_original_version,
+    set_current_version,
+)
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -38,33 +43,7 @@ def _version_meta(v: ReportVersion, current_id: str | None) -> dict:
 
 def _ensure_original_version(db, task: Task) -> ReportVersion:
     """首次访问时，把生成引擎产出的 Markdown 播种为 kind='original' 版本（v1），确保原始稿不丢。"""
-    existing = (
-        db.query(ReportVersion)
-        .filter(ReportVersion.task_id == task.id, ReportVersion.kind == "original")
-        .first()
-    )
-    if existing:
-        return existing
-    md = (task.result or {}).get("markdown") or ""
-    original = ReportVersion(
-        task_id=task.id,
-        kind="original",
-        version_no=1,
-        edited_by="ai",
-        summary="自动生成（联网检索）" if (task.web or task.search_enabled) else "自动生成",
-        content_markdown=md,
-        note="生成引擎原始稿",
-        editor="系统",
-        is_current=1,
-    )
-    db.add(original)
-    # 该任务其它版本（如有）取消 current
-    db.query(ReportVersion).filter(ReportVersion.task_id == task.id).update(
-        {ReportVersion.is_current: 0}
-    )
-    db.commit()
-    db.refresh(original)
-    return original
+    return ensure_original_version(db, task)
 
 
 def _current_version(db, task_id: str) -> ReportVersion | None:
@@ -126,31 +105,15 @@ def save_report_version(task_id: str, req: SaveVersionRequest):
         if not t:
             return {"status": "not_found"}
         _ensure_original_version(db, t)
-        max_no = (
-            db.query(ReportVersion.version_no)
-            .filter(ReportVersion.task_id == task_id)
-            .order_by(ReportVersion.version_no.desc())
-            .first()
-        )
-        next_no = (max_no[0] if max_no and max_no[0] else 0) + 1
-        v = ReportVersion(
+        v = create_report_version(
+            db,
             task_id=task_id,
-            kind="revised",
-            version_no=next_no,
-            edited_by="human",
-            summary=req.note or "手动修订",
             content_markdown=req.content_markdown or "",
             content_html=req.content_html or None,
             note=req.note or None,
+            edited_by="human",
             editor=settings.default_owner_name,
-            is_current=1,
         )
-        db.query(ReportVersion).filter(ReportVersion.task_id == task_id).update(
-            {ReportVersion.is_current: 0}
-        )
-        db.add(v)
-        db.commit()
-        db.refresh(v)
         return _version_meta(v, v.id)
 
 
@@ -179,13 +142,6 @@ def revise_report(task_id: str, req: ReviseRequest):
         prev_md = current.content_markdown
         title = t.title
         analysis_type = t.analysis_type
-        max_no = (
-            db.query(ReportVersion.version_no)
-            .filter(ReportVersion.task_id == task_id)
-            .order_by(ReportVersion.version_no.desc())
-            .first()
-        )
-        next_no = (max_no[0] if max_no and max_no[0] else 0) + 1
 
     try:
         gen = ReportGenerator(
@@ -198,10 +154,28 @@ def revise_report(task_id: str, req: ReviseRequest):
         logger.exception("AI 再改失败 task=%s", task_id)
         return {"error": "revise_failed", "message": f"AI 再改失败：{e}"}
 
-    # 即时重渲产物到 {task_id}_v{n}/（失败不阻塞版本保存：产物可稍后回滚/手动重渲）
+    with SessionLocal() as db:
+        t = db.get(Task, task_id)
+        if t is None:
+            return {"error": "task_gone", "message": "任务已不存在"}
+        v = create_report_version(
+            db,
+            task_id=task_id,
+            content_markdown=new_md,
+            content_html=None,
+            note=req.instruction,
+            edited_by="ai",
+            editor="系统",
+            summary=req.instruction,
+        )
+        version_id = v.id
+        version_no = v.version_no
+        version_created_at = v.created_at
+
+    # 即时重渲产物到实际分配的版本目录（失败不阻塞版本保存）。
     render_warning: str | None = None
     try:
-        exp = gen.export(new_md, title, settings.generated_dir, slug=f"{task_id}_v{next_no}")
+        exp = gen.export(new_md, title, settings.generated_dir, slug=f"{task_id}_v{version_no}")
     except Exception as e:  # noqa: BLE001
         logger.warning("revise 重渲失败（版本仍保存）task=%s：%s", task_id, e)
         render_warning = f"重渲失败：{e}"
@@ -210,44 +184,28 @@ def revise_report(task_id: str, req: ReviseRequest):
         t = db.get(Task, task_id)
         if t is None:
             return {"error": "task_gone", "message": "任务已不存在"}
-        db.query(ReportVersion).filter(ReportVersion.task_id == task_id).update(
-            {ReportVersion.is_current: 0}
-        )
-        v = ReportVersion(
-            task_id=task_id,
-            kind="revised",
-            version_no=next_no,
-            edited_by="ai",
-            summary=req.instruction,
-            content_markdown=new_md,
-            note=req.instruction,
-            editor="系统",
-            is_current=1,
-        )
-        db.add(v)
-        db.commit()
-        db.refresh(v)
-        # Task.result 更新为最新产物，下载端点（无 version 参数）即可取当前版
-        safe = {k: val for k, val in (t.result or {}).items() if k != "folder"}
-        safe.update(
-            {
-                "markdown": new_md,
-                "title": title,
-                "word": exp.get("word"),
-                "pdf": exp.get("pdf"),
-                "pdf_available": exp.get("pdf_available", False),
-            }
-        )
-        t.result = safe
-        db.commit()
-        vid = v.id
+        current = _current_version(db, task_id)
+        if current is not None and current.id == version_id:
+            # 只有仍为当前版本时才更新默认下载产物，避免较慢的并发渲染覆盖新版本。
+            safe = {k: val for k, val in (t.result or {}).items() if k != "folder"}
+            safe.update(
+                {
+                    "markdown": new_md,
+                    "title": title,
+                    "word": exp.get("word"),
+                    "pdf": exp.get("pdf"),
+                    "pdf_available": exp.get("pdf_available", False),
+                }
+            )
+            t.result = safe
+            db.commit()
     resp = {
-        "id": vid,
-        "version_no": next_no,
+        "id": version_id,
+        "version_no": version_no,
         "kind": "revised",
         "edited_by": "ai",
         "summary": req.instruction,
-        "created_at": v.created_at.isoformat() if v.created_at else None,
+        "created_at": version_created_at.isoformat() if version_created_at else None,
         "is_current": True,
         "word": f"/api/download/{task_id}?kind=word" if exp.get("word") else None,
         "pdf_available": exp.get("pdf_available", False),
@@ -288,14 +246,10 @@ def rollback_version(vid: str):
         exp = {"word": None, "pdf": None, "pdf_available": False}
 
     with SessionLocal() as db:
-        v = db.get(ReportVersion, vid)
+        v = set_current_version(db, vid)
         if not v:
             return {"error": "version_not_found", "message": "版本不存在"}
         t = db.get(Task, task_id)
-        db.query(ReportVersion).filter(ReportVersion.task_id == task_id).update(
-            {ReportVersion.is_current: 0}
-        )
-        v.is_current = 1
         safe = {k: val for k, val in (t.result or {}).items() if k != "folder"}
         safe.update(
             {

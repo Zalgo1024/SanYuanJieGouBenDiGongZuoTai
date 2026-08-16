@@ -6,7 +6,7 @@ import { ArrowLeft, Eye, Save } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import { apiRequest } from "@/lib/api";
-import { MarkdownReport } from "@/lib/markdown";
+import { ReportPresentation } from "./report-presentation";
 
 export function ReportEditor({ reportId }: { reportId: string }) {
   const router = useRouter();
@@ -29,7 +29,11 @@ export function ReportEditor({ reportId }: { reportId: string }) {
 
   useEffect(() => {
     if (!dirty) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    const warn = (event: BeforeUnloadEvent) => {
+      // Chrome 需要 returnValue 才可靠弹出离开确认框
+      event.preventDefault();
+      event.returnValue = "";
+    };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
@@ -81,7 +85,7 @@ export function ReportEditor({ reportId }: { reportId: string }) {
   return <section className="editor-page">
     {saveError && <p className="form-error" role="alert">{saveError}</p>}
     <header className="editor-page__top"><div><Link href={`/reports/${reportId}`} className="text-action"><ArrowLeft size={15} />返回阅读器</Link><span className="eyebrow">报告修订 / Markdown</span><h1>编辑分析版本</h1></div><div><span className={dirty ? "editor-version editor-version--dirty" : "editor-version"}>{dirty ? "有未保存更改" : "所有更改已保存"} · 基于 v{report.version}</span><button className="primary-button" type="button" onClick={save} disabled={saving || !dirty}><Save size={16} />{saving ? "保存中" : "保存为新版本"}</button></div></header>
-    <div className="editor-split"><section className="editor-source"><div className="editor-source__label"><label htmlFor="report-markdown">报告 Markdown 源码</label><span>{markdown.length.toLocaleString("zh-CN")} 字符</span></div><label className="editor-note" htmlFor="report-version-note"><span>版本备注</span><input id="report-version-note" aria-label="版本备注" value={note} onChange={(event) => setNote(event.target.value)} placeholder="例如：补充证据边界与来源" maxLength={120} /></label><textarea id="report-markdown" aria-label="报告 Markdown 源码" value={markdown} onChange={(event) => setMarkdown(event.target.value)} spellCheck={false} /></section><section className="editor-preview"><span className="eyebrow"><Eye size={14} />实时预览</span><MarkdownReport markdown={markdown} /></section></div>
+    <div className="editor-split"><section className="editor-source"><div className="editor-source__label"><label htmlFor="report-markdown">报告 Markdown 源码</label><span>{markdown.length.toLocaleString("zh-CN")} 字符</span></div><label className="editor-note" htmlFor="report-version-note"><span>版本备注</span><input id="report-version-note" aria-label="版本备注" value={note} onChange={(event) => setNote(event.target.value)} placeholder="例如：补充证据边界与来源" maxLength={120} /></label><textarea id="report-markdown" aria-label="报告 Markdown 源码" value={markdown} onChange={(event) => setMarkdown(event.target.value)} spellCheck={false} /></section><section className="editor-preview"><span className="eyebrow"><Eye size={14} />实时预览</span><ReportPresentation markdown={markdown} fallbackTitle={report.title} mode="editor" /></section></div>
     {pendingHref && <div className="report-conversation-backdrop" role="presentation"><section className="report-conversation-dialog" role="dialog" aria-modal="true" aria-labelledby="editor-leave-title"><header><div><span className="eyebrow">未保存更改</span><h2 id="editor-leave-title">确定离开编辑器吗？</h2></div></header><p>当前 Markdown 或版本备注尚未保存，离开后这些更改会丢失。</p><footer><button className="secondary-button" type="button" onClick={() => setPendingHref("")}>继续编辑</button><button className="danger-button" type="button" onClick={() => router.push(pendingHref)}>放弃更改并离开</button></footer></section></div>}
   </section>;
 }

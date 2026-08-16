@@ -12,6 +12,7 @@
     generate_diagram(data, "output.html") # 生成 HTML（自动检测扩展名）
 """
 
+from html import escape
 import json
 import os
 import re
@@ -802,7 +803,9 @@ def _generate_html(data: dict, output_path: str) -> Optional[str]:
         return None
 
     viz = data.get("viz", "network")
-    title = data.get("title", "利益关系网络图")
+    if viz not in ("network", "org", "flow"):
+        viz = "network"  # 白名单兜底，防任意值注入 JS 字符串
+    title = escape(str(data.get("title", "利益关系网络图")), quote=True)
 
     # ── org/flow：自算层级坐标，喂给 vis 显式 x/y（避环、保层级观感） ──
     fixed_pos: dict = {}
@@ -915,16 +918,20 @@ def _generate_html(data: dict, output_path: str) -> Optional[str]:
     # ── 内联 vis 库（离线可用，不依赖 CDN） ──
     lib_script = _load_vis_lib_script()
 
+    # 嵌入内联 <script> 的 JSON 一律转义 '<'（\u003c）：防止数据中的
+    # '</script>' 提前闭合脚本标签造成注入（json.dumps 不转义 ASCII '<'）。
+    def _js_safe_json(obj):
+        return _json.dumps(obj, ensure_ascii=False).replace("<", "\\u003c")
+
     # org/flow 的初始层级坐标 JSON（供"重新布局"还原）；network 为空
-    fixed_pos_json = _json.dumps(
-        {k: {"x": v[0], "y": v[1]} for k, v in fixed_pos.items()},
-        ensure_ascii=False,
+    fixed_pos_json = _js_safe_json(
+        {k: {"x": v[0], "y": v[1]} for k, v in fixed_pos.items()}
     )
     physics_default = "true" if viz == "network" else "false"
 
-    nodes_json = _json.dumps(vis_nodes, ensure_ascii=False)
-    edges_json = _json.dumps(vis_edges, ensure_ascii=False)
-    options_json = _json.dumps(options, ensure_ascii=False)
+    nodes_json = _js_safe_json(vis_nodes)
+    edges_json = _js_safe_json(vis_edges)
+    options_json = _js_safe_json(options)
 
     html = (_HTML_VIS_TEMPLATE
             .replace("@@TITLE@@", title)

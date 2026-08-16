@@ -7,10 +7,10 @@
 1. 校验 DIAGRAM 块存在且为合法 JSON、nodes/edges 结构基本正确；
 2. 校验必要 ## 章节齐全；
 3. 校验版权声明行存在；
-4. 能修则修（不虚构内容）：
-   - 缺 DIAGRAM：若有 structured 输入 → 用规则引擎合成图；否则最佳努力从正文抽取实体；
-   - DIAGRAM JSON 损坏：同上替换；
-   - 缺章节 / 缺版权行：补齐占位；
+4. 只修复不涉及分析判断的格式问题：
+   - 缺 DIAGRAM：仅在 structured 已明确给出主体与关系时据实生成；
+   - 缺章节或无结构化依据的关系图：只报告错误，不补占位、不猜实体；
+   - 缺版权行：补版权声明；
 返回 (repaired_md, contract_dict)。contract_dict 透传给前端做「结构校验」徽标。
 
 注意：本模块只做结构修复，不重写 LLM 的分析内容；无法补全的分析性缺失（如逻辑空洞）
@@ -27,8 +27,10 @@ logger = logging.getLogger(__name__)
 DIAGRAM_RE = re.compile(r"```DIAGRAM\s*\n(.*?)\n```", re.DOTALL)
 # ## 二级标题行（含中文/数字编号前缀，如「## 一、组织画像」「## 1. 结论」）
 _SECTION_HEAD_RE = re.compile(r"^##\s*([^\n]+)$", re.MULTILINE)
-# 章节标题编号前缀（中文数字/阿拉伯数字/括号编号）
-_NUM_PREFIX_RE = re.compile(r"^[（(]?[一二三四五六七八九十百\d]+[）)、.．\s]*")
+# 章节标题编号前缀（中文数字/阿拉伯数字/括号编号）。
+# 注意：编号后必须紧跟分隔符（、.．)）等，避免把「三元结构分析正文」这类
+# 以中文数字开头的标题误当编号删除（如「三」+ 无分隔符 → 不匹配）。
+_NUM_PREFIX_RE = re.compile(r"^[（(]?\s*(?:[一二三四五六七八九十百]+|[0-9]+)\s*[）)、.．、]\s*")
 
 REQUIRED_SECTIONS = {
     "case": ["案例事实摘要", "分析框架说明", "三元结构分析正文", "结论"],
@@ -71,6 +73,16 @@ def _has_section(md: str, title: str) -> bool:
         if cleaned == title or (title and title in cleaned):
             return True
     return False
+
+
+def _last_section_pos(md: str, title: str) -> int | None:
+    """返回最后一个匹配 title 的 ## 章节行起始位置（无匹配返回 None）。"""
+    pos = -1
+    for m in _SECTION_HEAD_RE.finditer(md or ""):
+        cleaned = _NUM_PREFIX_RE.sub("", m.group(0).strip()).strip()
+        if cleaned == title or (title and title in cleaned):
+            pos = m.start()
+    return pos if pos >= 0 else None
 
 
 def _count_sentinel_modes(md: str) -> int:
@@ -124,36 +136,24 @@ def _best_effort_nodes(md: str) -> list[str]:
     return out[:12]
 
 
-def _placeholder_diagram(structured=None, md: str = "") -> dict:
-    """生成一张可用的 DIAGRAM。优先用规则引擎（有 structured），否则抽实体。"""
-    if structured is not None:
-        try:
-            from app import rule_engine
+def _diagram_from_structured(structured=None) -> dict | None:
+    """仅依据明确的结构化主体与关系生成图，不从正文猜测。"""
+    if structured is None:
+        return None
+    try:
+        from app import rule_engine
 
-            si = (
-                structured
-                if isinstance(structured, rule_engine.StructuredInput)
-                else rule_engine.StructuredInput.model_validate(structured)
-            )
-            d = rule_engine._build_diagram(si)
-            if d.get("nodes"):
-                return d
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("DIAGRAM 合成失败，降级为最佳努力提取：%s", exc)
-    names = _best_effort_nodes(md)
-    if len(names) >= 2:
-        nodes = [{"id": f"a{i}", "label": n, "type": "actor"} for i, n in enumerate(names)]
-        edges = [
-            {"source": f"a{i}", "target": f"a{i+1}", "label": "关联", "type": "economic"}
-            for i in range(len(names) - 1)
-        ]
-        return {"viz": "network", "title": "利益关系图（自动提取）", "nodes": nodes, "edges": edges}
-    return {
-        "viz": "network",
-        "title": "利益关系图（占位）",
-        "nodes": [{"id": "evt", "label": "事件", "type": "event"}],
-        "edges": [],
-    }
+        si = (
+            structured
+            if isinstance(structured, rule_engine.StructuredInput)
+            else rule_engine.StructuredInput.model_validate(structured)
+        )
+        d = rule_engine._build_diagram(si)
+        if len(d.get("nodes") or []) >= 2 and d.get("edges"):
+            return d
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("根据结构化输入生成 DIAGRAM 失败：%s", exc)
+    return None
 
 
 def _diagram_block(d: dict) -> str:
@@ -171,6 +171,7 @@ def validate_and_repair(md: str, analysis_type: str = "case", structured=None):
     mode = "llm"
     diagram_synthetic = False
     type_mismatch = False
+    repaired = False
 
     # 0) 一级标题
     if not md.lstrip().startswith("# "):
@@ -181,32 +182,35 @@ def validate_and_repair(md: str, analysis_type: str = "case", structured=None):
     diagram_ok = False
     diag = _extract_diagram(md)
     if diag[0] is None:
-        errors.append("缺少 DIAGRAM 利益关系图，已自动合成")
-        d = _placeholder_diagram(structured, md)
-        diagram_synthetic = True
-        diagram_ok = True
-        block = _diagram_block(d)
-        if "## 附录" in md:
-            md = md.replace("## 附录", block + "\n## 附录", 1)
+        d = _diagram_from_structured(structured)
+        if d is None:
+            errors.append("缺少有事实依据的 DIAGRAM 利益关系图")
         else:
-            md = md.rstrip() + "\n\n" + block
+            errors.append("缺少 DIAGRAM，已根据结构化主体与关系生成")
+            diagram_synthetic = True
+            diagram_ok = True
+            repaired = True
+            block = _diagram_block(d)
+            if "## 附录" in md:
+                md = md.replace("## 附录", block + "\n## 附录", 1)
+            else:
+                md = md.rstrip() + "\n\n" + block
     elif diag[0] == "invalid":
-        errors.append("DIAGRAM 不是合法 JSON，已用合成图替换")
-        d = _placeholder_diagram(structured, md)
-        diagram_synthetic = True
-        diagram_ok = True
-        block = _diagram_block(d)
-        md = DIAGRAM_RE.sub(lambda _m: block, md, count=1)
+        d = _diagram_from_structured(structured)
+        if d is None:
+            errors.append("DIAGRAM 不是合法 JSON，且没有结构化关系可据实重建")
+        else:
+            errors.append("DIAGRAM 不是合法 JSON，已根据结构化主体与关系重建")
+            diagram_synthetic = True
+            diagram_ok = True
+            repaired = True
+            md = DIAGRAM_RE.sub(lambda _m: _diagram_block(d), md, count=1)
     else:
         obj = diag[1]
         nodes = obj.get("nodes") if isinstance(obj, dict) else None
         edges = obj.get("edges") if isinstance(obj, dict) else None
         if not isinstance(nodes, list) or not nodes:
-            errors.append("DIAGRAM 缺少有效 nodes，已用合成图替换")
-            d = _placeholder_diagram(structured, md)
-            diagram_synthetic = True
-            diagram_ok = True
-            md = DIAGRAM_RE.sub(lambda _m: _diagram_block(d), md, count=1)
+            errors.append("DIAGRAM 缺少有效 nodes")
         else:
             diagram_ok = True
             # 规范化边 type，避免前端 viz 取错样式
@@ -221,26 +225,10 @@ def validate_and_repair(md: str, analysis_type: str = "case", structured=None):
             if changed:
                 obj["edges"] = edges
                 md = DIAGRAM_RE.sub(lambda _m: _diagram_block(obj).rstrip("\n"), md, count=1)
+                repaired = True
 
-    # 2) 必要章节
-    req = REQUIRED_SECTIONS.get(analysis_type, REQUIRED_SECTIONS["case"])
-    missing = [s for s in req if f"## {s}" not in md]
-    if missing:
-        errors.append("缺少必要章节：" + "、".join(missing))
-        # 在正文后、附录前补齐占位章节（仅标题+引导语，不虚构分析）
-        patch = ""
-        for s in missing:
-            patch += f"\n## {s}\n\n（该章节在原始输出中缺失，已补占位；如需完整内容，请重新生成或补充材料。）\n"
-        if "## 附录" in md:
-            md = md.replace("## 附录", patch + "\n## 附录", 1)
-        else:
-            md = md.rstrip() + "\n" + patch
-
-    # 3) 版权行
-    if "国作登字" not in md:
-        md = md.rstrip() + "\n\n分析框架：三元结构理论 © 2026, CC BY-NC-SA 4.0，国作登字-2026-A-00048134\n"
-
-    # 4) 类型一致性护栏（T4 双轨护栏第二层）：缺哨兵标 type_mismatch
+    # 2) 类型一致性护栏（T4 双轨护栏第二层）：缺哨兵标 type_mismatch
+    #    必须在补占位章节之前判定，否则占位会把缺的哨兵「补」上、护栏形同虚设。
     #    - combo：至少 2 类哨兵混编（_count_sentinel_modes）
     #    - org/opinion：哨兵已并入 REQUIRED_SECTIONS，缺失即 type_mismatch
     #    - case/policy：提示词侧已强制哨兵（guard），此处不再重复判 mismatch，
@@ -262,17 +250,28 @@ def validate_and_repair(md: str, analysis_type: str = "case", structured=None):
             type_mismatch = True
             errors.append("类型一致性缺失（缺哨兵章节）：" + "、".join(missing_sentinel))
 
+    # 3) 必要章节（用 _has_section 模糊匹配，容忍「## 一、组织画像」等编号前缀）
+    req = REQUIRED_SECTIONS.get(analysis_type, REQUIRED_SECTIONS["case"])
+    missing = [s for s in req if not _has_section(md, s)]
+    if missing:
+        errors.append("缺少必要章节：" + "、".join(missing))
+
+    # 4) 版权行
+    if "国作登字" not in md:
+        md = md.rstrip() + "\n\n分析框架：三元结构理论 © 2026, CC BY-NC-SA 4.0，国作登字-2026-A-00048134\n"
+        repaired = True
+
     contract = {
         "valid": diagram_ok and not missing and not type_mismatch,
         "diagram_ok": diagram_ok,
         "diagram_synthetic": diagram_synthetic,
         "missing_sections": missing,
         "errors": errors,
-        "repaired": len(errors) > 0,
+        "repaired": repaired,
         "mode": mode,
         "type_mismatch": type_mismatch,
         # 降级信号：图是合成的（LLM 没给可用关系图）且必要章节也缺失 ——
         # 说明 LLM 输出偏离契约太远、几乎无可信内容，应回退规则引擎。
-        "degrade": diagram_synthetic and bool(missing),
+        "degrade": not diagram_ok or bool(missing) or type_mismatch,
     }
     return md, contract

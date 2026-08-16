@@ -11,7 +11,10 @@ import uuid
 
 from app.models import Task  # Task 仅依赖 Base（补丁不替换），可在顶层导入
 
-TASK_DTO_FIELDS = {"task_id", "title", "status", "analysis_type", "project_id", "created_at"}
+TASK_DTO_FIELDS = {
+    "task_id", "title", "status", "analysis_type", "project_id", "created_at",
+    "phase", "progress_pct", "engine_used", "material_ids", "error", "error_phase", "quality",
+}
 
 
 def _insert_task(**kw) -> str:
@@ -27,6 +30,10 @@ def _insert_task(**kw) -> str:
                 analysis_type=kw.get("analysis_type", "case"),
                 status=kw.get("status", "done"),
                 project_id=kw.get("project_id"),
+                error=kw.get("error"),
+                error_phase=kw.get("error_phase"),
+                quality_score=kw.get("quality_score"),
+                quality_result=kw.get("quality_result"),
             )
         )
         db.commit()
@@ -64,6 +71,48 @@ def test_tasks_filter_by_status(client):
     ids = [i["task_id"] for i in r.json()]
     assert tid_done in ids
     assert all(i["status"] == "done" for i in r.json())
+
+
+def test_error_task_exposes_a_user_readable_failure_reason(client):
+    tid = _insert_task(
+        title="导出失败",
+        status="error",
+        error="Word 导出包含不可用控制字符",
+        error_phase="output",
+    )
+    response = client.get("/api/tasks", params={"status": "error"})
+    dto = next(item for item in response.json() if item["task_id"] == tid)
+
+    assert dto["error"] == "Word 导出包含不可用控制字符"
+    assert dto["error_phase"] == "output"
+
+
+def test_tasks_exposes_report_quality_metadata(client):
+    quality = {
+        "valid": False,
+        "score": 60,
+        "issues": [
+            {
+                "code": "source_links",
+                "severity": "error",
+                "message": "使用联网来源时，附录必须包含 Markdown 来源链接。",
+                "section": "附录",
+            }
+        ],
+    }
+    tid = _insert_task(
+        title="质量校验失败",
+        status="error",
+        error="报告未通过质量闸门",
+        error_phase="quality_gate",
+        quality_score=60,
+        quality_result=quality,
+    )
+
+    response = client.get("/api/tasks", params={"status": "error"})
+    dto = next(item for item in response.json() if item["task_id"] == tid)
+
+    assert dto["quality"] == quality
 
 
 def test_tasks_filter_by_project(client):

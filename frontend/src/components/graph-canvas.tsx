@@ -97,17 +97,22 @@ export function buildGraphOptions(diagram: DiagramDocument): Options {
   };
 }
 
+function escapeTooltipText(value: unknown): string {
+  // vis-network 的 tooltip (title) 以 innerHTML 渲染，必须转义，防注入
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function graphData(diagram: DiagramDocument) {
   const nodes = new DataSet<Node>(diagram.nodes.map((node) => {
     const color = nodeColors[node.type] ?? nodeColors.actor;
-    return { id: node.id, label: node.label, title: `${node.label}\n类型：${node.type}`, shape: nodeShapes[node.type] ?? "box", color: { ...color, highlight: { background: "#ffffff", border: color.border }, hover: { background: "#ffffff", border: color.border } } };
+    return { id: node.id, label: node.label, title: `${escapeTooltipText(node.label)}\n类型：${escapeTooltipText(node.type)}`, shape: nodeShapes[node.type] ?? "box", color: { ...color, highlight: { background: "#ffffff", border: color.border }, hover: { background: "#ffffff", border: color.border } } };
   }));
   const edges = new DataSet<Edge>(diagram.edges.map((edge) => ({
     id: edge.id,
     from: edge.source,
     to: edge.target,
     label: edge.label,
-    title: `${edge.label}\n类型：${edge.type}`,
+    title: `${escapeTooltipText(edge.label)}\n类型：${escapeTooltipText(edge.type)}`,
     color: { color: edgeColors[edge.type] ?? edgeColors.unknown, highlight: edgeColors[edge.type] ?? edgeColors.unknown, hover: edgeColors[edge.type] ?? edgeColors.unknown },
     dashes: edgeDashes[edge.type] ?? edgeDashes.unknown,
   })));

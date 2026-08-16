@@ -1,5 +1,5 @@
-import { InterestIndexScreen } from "@/components/app-screens";
+import { redirect } from "next/navigation";
 
 export default function InterestIndexPage() {
-  return <InterestIndexScreen />;
+  redirect("/dashboard");
 }

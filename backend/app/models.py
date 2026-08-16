@@ -17,9 +17,11 @@ from sqlalchemy import (
     ForeignKey,
     Float,
     Integer,
+    Index,
     JSON,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import relationship
 
@@ -95,7 +97,9 @@ class Task(Base):
     attempt_no = Column(Integer, default=1)  # 第几次尝试（1=首次）
 
     # —— 生成模式（2.4 内置规则引擎 + 可选 LLM 插件）——
-    mode = Column(String(16), default="rule")  # rule(默认,离线) | llm(可选插件)
+    mode = Column(String(16), default="rule")  # 实际执行引擎：rule | llm
+    input_mode = Column(String(16), nullable=True)  # freeform | structured
+    requested_engine = Column(String(16), nullable=True)  # auto | rule | llm
     structured = Column(JSON, nullable=True)   # rule 模式：结构化输入
     llm_config = Column(JSON, nullable=True)    # llm 模式：每请求 {api_key,base_url,model}
 
@@ -120,6 +124,10 @@ class Task(Base):
     prompt_version = Column(String(32), nullable=True)    # 提示词版本（可复现）
     llm_raw_response = Column(Text, nullable=True)        # LLM 原始响应（截断存储，调试用）
 
+    # —— 报告写作规格的可执行质量闸门 ——
+    quality_score = Column(Integer, nullable=True)
+    quality_result = Column(JSON, nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=_now)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -137,7 +145,20 @@ class ReportVersion(Base):
     """
 
     __tablename__ = "report_versions"
-
+    __table_args__ = (
+        Index(
+            "uq_report_versions_task_version",
+            "task_id",
+            "version_no",
+            unique=True,
+        ),
+        Index(
+            "uq_report_versions_one_current",
+            "task_id",
+            unique=True,
+            sqlite_where=text("is_current = 1"),
+        ),
+    )
     id = Column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
     task_id = Column(
         String(32),

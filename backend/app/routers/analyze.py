@@ -9,6 +9,9 @@ from pydantic import BaseModel
 
 from app.db import SessionLocal
 from app import queue as taskq
+from app import rule_engine
+from app.generation_routing import GenerationRouteError, decide_generation_route
+from app.llm_settings_store import public_settings
 from app.models import ReportVersion, Task, _now
 
 logger = logging.getLogger(__name__)
@@ -21,7 +24,9 @@ class AnalyzeRequest(BaseModel):
     input_text: str = ""
     analysis_type: str = "case"  # case | policy | org | opinion | combo
     project_id: str | None = None  # 预留（阶段三接入），可选
-    mode: str = "rule"  # rule(默认,离线内置引擎) | llm(可选 AI 插件,增强)
+    mode: str | None = None  # 旧客户端兼容字段
+    input_mode: str | None = None  # freeform | structured
+    requested_engine: str | None = None  # auto | rule | llm
     structured: dict | None = None  # rule 模式：结构化输入
     # llm 模式：每请求仅携带模型/温度/提示词版本 —— 不含 api_key（密钥只在后端，
     # 来自 data/llm_settings.json 或 .env，详见 /api/settings/llm）。
@@ -32,10 +37,47 @@ class AnalyzeRequest(BaseModel):
     source_urls: list[str] | None = None  # T8：用户勾选来源白名单（null=自动检索全部）
 
 
+def llm_is_available() -> bool:
+    return bool(public_settings().get("has_key"))
+
+
 @router.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
+    requested_engine = req.requested_engine or req.mode or "auto"
+    try:
+        decision = decide_generation_route(
+            input_mode=req.input_mode,
+            requested_engine=requested_engine,
+            structured=req.structured,
+            llm_available=llm_is_available(),
+        )
+    except GenerationRouteError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "phase": "input_validation",
+                    "details": [],
+                }
+            },
+        )
+    if decision.input_mode == "structured":
+        validation = rule_engine.validate_structured_input(req.structured or {})
+        if not validation.valid:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "invalid_structured_input",
+                        "message": "结构化录入缺少生成正式报告所需的数据。",
+                        "phase": "input_validation",
+                        "details": validation.missing_fields,
+                    }
+                },
+            )
     task_id = uuid.uuid4().hex
-    mode = req.mode if req.mode in ("rule", "llm") else "rule"
     with SessionLocal() as db:
         db.add(
             Task(
@@ -44,7 +86,9 @@ async def analyze(req: AnalyzeRequest):
                 input_text=req.input_text,
                 analysis_type=req.analysis_type,
                 project_id=req.project_id,
-                mode=mode,
+                mode=decision.selected_engine,
+                input_mode=decision.input_mode,
+                requested_engine=decision.requested_engine,
                 structured=req.structured,
                 llm_config=req.llm_config,
                 material_ids=req.material_ids or None,
@@ -87,6 +131,7 @@ def get_result(task_id: str):
             "phase": t.phase,
             "progress_pct": t.progress_pct or 0,
             "search_results": t.search_results,
+            "quality": t.quality_result,
         }
 
 
@@ -104,6 +149,9 @@ def retry_task(task_id: str):
         t = db.get(Task, task_id)
         if not t:
             return {"status": "not_found"}
+        # 互斥：原任务仍在排队/执行时拒绝重复重试，避免生成多份重复副本互相覆盖
+        if t.status in ("queued", "generating"):
+            return {"status": "busy", "message": "任务仍在执行中，请等待完成后再重试"}
         new_id = uuid.uuid4().hex
         new_task = Task(
             id=new_id,
@@ -112,6 +160,8 @@ def retry_task(task_id: str):
             analysis_type=t.analysis_type,
             project_id=t.project_id,
             mode=t.mode or "rule",
+            input_mode=t.input_mode,
+            requested_engine=t.requested_engine or t.mode or "auto",
             structured=t.structured,
             llm_config=t.llm_config,
             owner_id=t.owner_id,
@@ -165,6 +215,7 @@ def poll_task(task_id: str):
             "phase": t.phase,
             "progress_pct": t.progress_pct or 0,
             "search_results": t.search_results,
+            "quality": t.quality_result,
             "server_time": _now().isoformat(),
         }
 
@@ -178,7 +229,7 @@ async def ws_progress(task_id: str, ws: WebSocket):
         t = db.get(Task, task_id)
         if not t:
             await ws.send_json({"status": "not_found"})
-            taskq.unsubscribe(task_id)
+            taskq.unsubscribe(task_id, q)
             return
         snap_status = t.status
         snap_data = (
@@ -194,7 +245,7 @@ async def ws_progress(task_id: str, ws: WebSocket):
         snap_msg["progress_pct"] = snap_pct
     await ws.send_json(snap_msg)
     if snap_status in ("done", "error"):
-        taskq.unsubscribe(task_id)
+        taskq.unsubscribe(task_id, q)
         return
     try:
         while True:
@@ -205,7 +256,7 @@ async def ws_progress(task_id: str, ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        taskq.unsubscribe(task_id)
+        taskq.unsubscribe(task_id, q)
 
 
 @router.get("/api/download/{task_id}")

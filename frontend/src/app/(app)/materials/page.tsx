@@ -1,2 +1,3 @@
-import { MaterialsScreen } from "@/components/app-screens";
-export default function MaterialsPage() { return <MaterialsScreen />; }
+import { redirect } from "next/navigation";
+
+export default function MaterialsPage() { redirect("/dashboard"); }

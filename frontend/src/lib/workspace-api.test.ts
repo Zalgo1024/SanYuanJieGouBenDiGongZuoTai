@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AnalysisTask } from "./domain";
-import { fetchCurrentReport, fetchWorkspaceSnapshot } from "./workspace-api";
+import { createAnalysisTask, fetchCurrentReport, fetchWorkspaceSnapshot } from "./workspace-api";
 
 const task: AnalysisTask = {
   id: "task-1",
@@ -107,5 +107,36 @@ describe("fetchWorkspaceSnapshot", () => {
       tasks: [expect.objectContaining({ id: "task-1", status: "done" })],
       reports: [],
     });
+  });
+});
+
+describe("createAnalysisTask", () => {
+  it("sends the explicit freeform and requested-engine contract", async () => {
+    const request = vi.fn(async () => ({ task_id: "task-new" }));
+
+    const result = await createAnalysisTask({
+      type: "case",
+      title: "事件分析",
+      context: "分析这个事件",
+      engine: "auto",
+      inputMode: "freeform",
+      materialIds: [],
+      web: false,
+    }, request);
+
+    expect(result).toEqual({ task_id: "task-new" });
+    expect(request).toHaveBeenCalledWith("/api/analyze", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        title: "事件分析",
+        input_text: "分析这个事件",
+        analysis_type: "case",
+        input_mode: "freeform",
+        requested_engine: "auto",
+        project_id: null,
+        material_ids: [],
+        web: false,
+      }),
+    }));
   });
 });

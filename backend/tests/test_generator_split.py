@@ -7,8 +7,12 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from app import rule_engine
 from app.generator import ReportGenerator
+from app.llm_client import MockClient
+from app.report_quality import ReportQualityError
 
 FIX = Path(__file__).resolve().parent / "fixtures"
 
@@ -82,3 +86,108 @@ def test_generate_and_export_orchestrates_and_is_compatible(tmp_path):
     # 引擎导出契约字段
     assert isinstance(out.get("pdf_available"), bool)
     assert out.get("word") and os.path.exists(out["word"])
+
+
+def test_freeform_llm_failure_never_degrades_to_rule(monkeypatch):
+    monkeypatch.setattr(
+        "app.llm_client.create_llm_from_config", lambda _config=None: MockClient()
+    )
+    gen = ReportGenerator(None, analysis_type="case", mode="llm", structured=None)
+
+    with pytest.raises(ValueError, match="自由输入"):
+        gen.generate("分析这个事件", "自由输入报告")
+
+
+def test_structured_llm_failure_can_degrade_to_rule(monkeypatch):
+    sample = _load("sample_event")
+    structured = rule_engine.StructuredInput.model_validate(sample)
+    monkeypatch.setattr(
+        "app.llm_client.create_llm_from_config", lambda _config=None: MockClient()
+    )
+    gen = ReportGenerator(
+        None,
+        analysis_type="case",
+        mode="llm",
+        structured=structured,
+    )
+
+    markdown = gen.generate("", sample["title"])
+
+    assert markdown.startswith("# ")
+    assert gen.validate()["engine_used"] == "rule"
+    assert gen.validate()["degraded_from_llm"] is True
+
+
+def test_rule_generation_attaches_a_passing_quality_result():
+    sample = _load("sample_event")
+    gen = _gen(sample)
+
+    gen.generate(title=sample["title"])
+
+    assert gen.quality().valid is True
+    assert gen.quality().score > 0
+
+
+def test_rule_generation_rejects_a_broken_template(monkeypatch):
+    sample = _load("sample_event")
+    gen = _gen(sample)
+    monkeypatch.setattr(
+        rule_engine,
+        "generate",
+        lambda _structured: "# 失败报告\n\n## 结论\n\n（未提供分析）",
+    )
+
+    with pytest.raises(ReportQualityError):
+        gen.generate(title=sample["title"])
+
+
+def test_llm_quality_failure_gets_at_most_two_targeted_revisions(monkeypatch):
+    sample = _load("sample_event")
+    valid = rule_engine.generate(rule_engine.StructuredInput.model_validate(sample))
+    invalid = valid.replace("图 1", "下图")
+
+    class SequenceLlm:
+        def __init__(self):
+            self.calls = []
+            self.responses = [invalid, invalid, valid]
+
+        def generate(self, system, user, temperature=0.2):
+            self.calls.append(user)
+            return self.responses.pop(0)
+
+    llm = SequenceLlm()
+    monkeypatch.setattr("app.llm_client.create_llm_from_config", lambda _config=None: llm)
+    gen = ReportGenerator(None, analysis_type="case", mode="llm", structured=None)
+
+    markdown = gen.generate("分析这个事件", sample["title"])
+
+    assert markdown
+    assert len(llm.calls) == 3
+    assert "figure_reference" in llm.calls[1]
+    assert gen.quality().valid is True
+
+
+def test_ai_revise_also_runs_the_quality_revision_loop(monkeypatch):
+    sample = _load("sample_event")
+    valid = rule_engine.generate(rule_engine.StructuredInput.model_validate(sample))
+    invalid = valid.replace("图 1", "下图")
+
+    class SequenceLlm:
+        def __init__(self):
+            self.calls = []
+            self.responses = [invalid, valid]
+
+        def generate(self, system, user, temperature=0.2):
+            self.calls.append(user)
+            return self.responses.pop(0)
+
+    llm = SequenceLlm()
+    monkeypatch.setattr("app.llm_client.create_llm_from_config", lambda _config=None: llm)
+    gen = ReportGenerator(None, analysis_type="case", mode="llm")
+
+    revised = gen.revise(valid, "压缩重复内容", sample["title"])
+
+    assert revised
+    assert len(llm.calls) == 2
+    assert "figure_reference" in llm.calls[1]
+    assert gen.quality().valid is True

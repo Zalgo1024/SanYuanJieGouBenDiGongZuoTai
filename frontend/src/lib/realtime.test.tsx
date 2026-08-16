@@ -18,7 +18,7 @@ class MockWebSocket {
   constructor(public url: string) {
     MockWebSocket.instances.push(this);
   }
-  close() {}
+  close = vi.fn();
 }
 
 function Probe({ enabled = true }: { enabled?: boolean }) {
@@ -64,6 +64,18 @@ describe("useTaskProgress", () => {
       phase: "search",
       progress: 18,
     });
+  });
+
+  it("closes the progress socket after a terminal error without loading a report", async () => {
+    render(<Probe />);
+    const socket = MockWebSocket.instances[0];
+
+    await act(async () => {
+      socket.onmessage?.({ data: JSON.stringify({ status: "error", phase: "output", progress_pct: 85 }) } as MessageEvent<string>);
+    });
+
+    expect(socket.close).toHaveBeenCalledOnce();
+    expect(storeMocks.loadReport).not.toHaveBeenCalled();
   });
 
   it("does not open a backend socket when realtime is disabled", () => {

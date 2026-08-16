@@ -90,29 +90,32 @@ class Config:
 
     def get_concept(self, name: str) -> Optional[dict]:
         """按名称（支持前缀匹配）查找概念。"""
+        if not name:
+            return None
         for c in self.concept_pool:
-            if c["name"] == name or c["name"].startswith(name):
+            cname = c.get("name", "")
+            if cname == name or (cname and cname.startswith(name)):
                 return c
         return None
 
     def get_interest_type(self, type_id: str) -> Optional[dict]:
         """按 id 查找利益类型。"""
         for t in self.interest_types:
-            if t["id"] == type_id:
+            if t.get("id") == type_id:
                 return t
         return None
 
     def get_node_type(self, type_id: str) -> Optional[dict]:
         """按 id 查找可视化节点类型。"""
         for n in self.visualization.get("node_types", []):
-            if n["id"] == type_id:
+            if n.get("id") == type_id:
                 return n
         return None
 
     def get_edge_type(self, type_id: str) -> Optional[dict]:
         """按 id 查找可视化边类型。"""
         for e in self.visualization.get("edge_types", []):
-            if e["id"] == type_id:
+            if e.get("id") == type_id:
                 return e
         return None
 

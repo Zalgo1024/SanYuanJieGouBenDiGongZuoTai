@@ -55,12 +55,12 @@ describe("ReportReader", () => {
     render(<ReportReader report={report} task={task} onReload={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "预览 v1" }));
 
-    expect(await screen.findByText("第一版正文")).toBeInTheDocument();
+    expect((await screen.findAllByText("第一版正文")).length).toBeGreaterThan(0);
     expect(screen.getByText("正在查看历史版本 v1")).toBeInTheDocument();
     expect(fetchReportVersion).toHaveBeenCalledWith("task-1", "version-1");
 
     fireEvent.click(screen.getByRole("button", { name: "返回当前版本" }));
-    expect(screen.getByText("第二版正文")).toBeInTheDocument();
+    expect(screen.getAllByText("第二版正文").length).toBeGreaterThan(0);
   });
 
   it("cancels the historical loading state when returning to the current version", async () => {
@@ -76,7 +76,7 @@ describe("ReportReader", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "预览 v2（当前版本）" }));
     expect(screen.queryByText("正在读取历史版本...")).not.toBeInTheDocument();
-    expect(screen.getByText("第二版正文")).toBeInTheDocument();
+    expect(screen.getAllByText("第二版正文").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "下载 Markdown" })).toBeEnabled();
 
     resolveVersion({
@@ -94,7 +94,7 @@ describe("ReportReader", () => {
 
     render(<ReportReader report={report} task={task} onReload={onReload} />);
     fireEvent.click(screen.getByRole("button", { name: "预览 v1" }));
-    await screen.findByText("第一版正文");
+    expect((await screen.findAllByText("第一版正文")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "回滚到此版本" }));
     expect(screen.getByText("回滚会把 v1 设为新的当前版本")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认回滚到 v1" }));

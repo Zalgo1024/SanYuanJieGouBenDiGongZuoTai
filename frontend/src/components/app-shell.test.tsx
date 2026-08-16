@@ -35,4 +35,17 @@ describe("AppShell backend status", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
     expect(storeMocks.refreshWorkspace).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps only the consolidated primary navigation", () => {
+    render(<AppShell><div>工作区内容</div></AppShell>);
+
+    const navigation = screen.getByRole("navigation", { name: "主导航" });
+    expect(navigation).toHaveTextContent("工作台");
+    expect(navigation).toHaveTextContent("新建分析");
+    expect(navigation).toHaveTextContent("设置");
+    expect(navigation).not.toHaveTextContent("项目");
+    expect(navigation).not.toHaveTextContent("材料库");
+    expect(navigation).not.toHaveTextContent("报告");
+    expect(navigation).not.toHaveTextContent("利益拆解");
+  });
 });

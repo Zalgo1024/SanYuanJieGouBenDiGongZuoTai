@@ -33,31 +33,32 @@ from parser import Block, ParsedReport, Section
 # 单模式按 canonical 序（向后兼容「别动老东西」）；多模式按作者源序（灵活组合）。
 MODULES = {
     "policy": {
-        "sections": ["fact_summary", "framework", "policy_portrait",
-                     "policy_weight", "analysis_body", "conclusion", "appendix"],
+        "sections": ["overview", "fact_summary", "evidence", "framework", "policy_portrait",
+                     "policy_weight", "core_conflicts", "analysis_body", "conclusion",
+                     "recommendations", "appendix"],
         "sentinels": ["policy_portrait", "policy_weight"],
         "label": "政策",
     },
     "event": {
-        "sections": ["fact_summary", "framework", "case_portrait",
-                     "case_flows", "analysis_body", "case_dynamics",
-                     "conclusion", "appendix"],
+        "sections": ["overview", "fact_summary", "evidence", "framework", "case_portrait",
+                     "case_flows", "core_conflicts", "analysis_body", "case_dynamics",
+                     "conclusion", "recommendations", "appendix"],
         "sentinels": ["case_portrait", "case_flows", "case_dynamics"],
         "label": "事件/案例",
     },
     "org": {
-        "sections": ["org_portrait", "org_structure", "org_survival",
+        "sections": ["overview", "org_portrait", "evidence", "org_structure", "org_survival",
                      "org_reproduction", "org_interest_network", "org_reverse",
-                     "org_transformation", "conclusion", "appendix"],
+                     "org_transformation", "core_conflicts", "conclusion", "recommendations", "appendix"],
         "sentinels": ["org_portrait", "org_structure", "org_survival",
                       "org_reproduction", "org_interest_network", "org_reverse",
                       "org_transformation"],
         "label": "组织",
     },
     "opinion": {
-        "sections": ["opinion_event", "opinion_actors", "opinion_narrative",
+        "sections": ["overview", "opinion_event", "evidence", "opinion_actors", "opinion_narrative",
                      "opinion_trilife", "opinion_reverse", "opinion_evolution",
-                     "conclusion", "appendix"],
+                     "core_conflicts", "conclusion", "recommendations", "appendix"],
         "sentinels": ["opinion_event", "opinion_actors", "opinion_narrative",
                       "opinion_trilife", "opinion_reverse", "opinion_evolution"],
         "label": "舆情",
@@ -216,39 +217,45 @@ def _set_auto_update_fields(docx_path: str) -> None:
     # 读取 docx 作为 ZIP，修改 settings.xml
     import tempfile
     tmp_path = docx_path + ".tmp"
-    with zipfile.ZipFile(docx_path, "r") as zin:
-        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                data = zin.read(item.filename)
-                if item.filename == "word/settings.xml":
-                    root = etree.fromstring(data)
-                    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-                    # 如果已有 updateFields 则修改值，否则新建
-                    uf = root.find(".//w:updateFields", ns)
-                    if uf is None:
-                        uf = etree.SubElement(root, f'{{{ns["w"]}}}updateFields')
-                        uf.set(f'{{{ns["w"]}}}val', "1")
-                    else:
-                        uf.set(f'{{{ns["w"]}}}val', "1")
-                    data = etree.tostring(root, xml_declaration=True, encoding="UTF-8",
-                                          standalone=True)
-                zout.writestr(item, data)
-
-    # 落位：覆盖写 docx。
-    # shutil.move 在 Windows 上若目标已存在会回退为 copyfile(覆盖 docx)+unlink(tmp)；
-    # 沙箱对 os.unlink 有安全拦截（tmp 会被送回收站且可能 fail-closed）。这里改为显式
-    # copyfile 覆盖 docx，并忽略 tmp 的清理异常（tmp 为临时文件，残留无害），确保
-    # docx 内容正确落位且不因临时文件清理失败而中断流程。真机环境无此 shim，行为一致。
-    import os
-    import shutil
     try:
-        shutil.move(tmp_path, docx_path)
-    except Exception:  # noqa: BLE001
-        shutil.copyfile(tmp_path, docx_path)
+        with zipfile.ZipFile(docx_path, "r") as zin:
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = zin.read(item.filename)
+                    if item.filename == "word/settings.xml":
+                        root = etree.fromstring(data)
+                        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+                        # 如果已有 updateFields 则修改值，否则新建
+                        uf = root.find(".//w:updateFields", ns)
+                        if uf is None:
+                            uf = etree.SubElement(root, f'{{{ns["w"]}}}updateFields')
+                            uf.set(f'{{{ns["w"]}}}val', "1")
+                        else:
+                            uf.set(f'{{{ns["w"]}}}val', "1")
+                        data = etree.tostring(root, xml_declaration=True, encoding="UTF-8",
+                                              standalone=True)
+                    zout.writestr(item, data)
+    except Exception:  # noqa: BLE001 - zip/etree 失败：清理临时文件后向上抛
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
+        raise
+
+    # 落位：覆盖写 docx。
+    # 不走 shutil.move —— 当目标 docx 已存在时，shutil.move 内部回退为
+    # copyfile(覆盖 docx) + os.unlink(tmp)；沙箱里 os.unlink 被 safe-delete shim
+    # 拦截，trash 操作即便报错也可能已"触碰" tmp 文件；最终抛 OSError 让我们以为
+    # shutil.move 失败，转去 shutil.copyfile(tmp, docx) 兜底时 tmp 已不可读，整条
+    # 落位链崩掉（FileNotFoundError）。改为显式 copyfile 覆盖 docx，tmp 用 best-effort
+    # 清理，残留无害。真机无 shim，行为一致。
+    import shutil
+    shutil.copyfile(tmp_path, docx_path)
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        # tmp 是临时文件, 残留无害, 不要因为清理失败打断主流程
+        pass
 
 
 # ── 页面设置 ──────────────────────────────────────────────
@@ -562,6 +569,22 @@ def _render_block(doc: Document, block: Block, config: Config, sec_id: str,
         # 引用块 → 浅灰背景单格表格 + ▌ 前缀
         _render_single_cell_table(doc, f"▌ {block.text}", _QUOTE_BG, None, config)
 
+    elif block.type == "code":
+        # 代码块 → 等宽字体，保留换行与围栏内原文
+        code_lines = (block.text or "").splitlines()
+        if code_lines and code_lines[0].startswith("```"):
+            code_lines = code_lines[1:]  # 去掉开围栏（含语言标注）
+        if code_lines and code_lines[-1].strip() == "```":
+            code_lines = code_lines[:-1]  # 去掉闭围栏
+        para = doc.add_paragraph()
+        for idx, code_line in enumerate(code_lines):
+            if idx:
+                para.add_run().add_break()
+            run = para.add_run(code_line)
+            run.font.name = "Consolas"
+            run.font.size = Pt(9)
+        return
+
     elif block.type == "table":
         doc.add_paragraph("")
         _render_multi_row_table(doc, block, config)
@@ -799,6 +822,7 @@ def _render_diagram(doc: Document, block: Block, config: Config,
         seq_title = title
 
     diag_result: Optional[dict] = None
+    tmp_path = None
 
     try:
         from viz_network import generate_diagram
@@ -849,20 +873,25 @@ def _render_diagram(doc: Document, block: Block, config: Config,
                     pass  # 目标文件被锁时跳过，不影响报告生成
                 try:
                     generate_diagram(data, html_path)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # HTML 失败不阻断报告，但告警便于排查
+                    import warnings
+                    warnings.warn(f"关系图 HTML 生成失败: {exc}")
                 diag_result = {"title": title, "seq": seq, "png": png_path, "html": html_path}
-
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
     except ImportError:
         p = doc.add_paragraph()
         _add_run(p, f"[关系图: {title}]", "body", config,
                  size_pt=10, color=_COVER_MUTED_COLOR)
-    except Exception:
-        pass
+    except Exception as exc:
+        import warnings
+        warnings.warn(f"关系图渲染失败: {exc}")
+    finally:
+        # 无论成功失败都清理临时 PNG，避免残留
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     return diag_result
 

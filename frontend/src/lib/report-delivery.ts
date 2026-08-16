@@ -160,6 +160,7 @@ export async function downloadReportArtifact(
   anchor.href = url;
   anchor.download = filename;
   anchor.click();
-  URL.revokeObjectURL(url);
+  // 延迟释放 blob URL：立即 revoke 在部分浏览器（Safari 等）会导致下载 0 字节
+  window.setTimeout(() => URL.revokeObjectURL(url), 4000);
   return filename;
 }

@@ -9,6 +9,7 @@
 并发上限：WORKER_COUNT 控制同时跑几道菜（默认 3），避免本机 LLM/CPU 打满。
 """
 import asyncio
+import logging
 import re
 import threading
 import time
@@ -19,33 +20,59 @@ from app.llm_client import create_llm
 from app.search import should_search
 from app.settings import settings
 
-WORKER_COUNT = 3
+logger = logging.getLogger(__name__)
+
+WORKER_COUNT = 6  # 6 并发：缓解连续多任务排队，体感不再"卡住"（本机 LLM 走远程 API，CPU 不是瓶颈）
 
 # 实时进度订阅（仅存在于有客户端连 WS 期间，ephemeral，非持久）
-_subscribers: dict[str, asyncio.Queue] = {}
+# 同一任务允许多个客户端各自订阅（每个 client 一个 queue），互不顶掉；
+# 并记录订阅者所在事件循环，供 worker 线程跨线程安全推送。
+_subscribers: dict[str, dict[asyncio.Queue, asyncio.AbstractEventLoop | None]] = {}
 _claim_lock = threading.Lock()
 _workers: list[asyncio.Task] = []
 
 
 def subscribe(task_id: str) -> asyncio.Queue:
     q: asyncio.Queue = asyncio.Queue()
-    _subscribers[task_id] = q
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    _subscribers.setdefault(task_id, {})[q] = loop
     return q
 
 
-def unsubscribe(task_id: str) -> None:
-    _subscribers.pop(task_id, None)
+def unsubscribe(task_id: str, q: asyncio.Queue | None = None) -> None:
+    """移除某个客户端的订阅；q 为空时移除该任务的全部订阅（旧调用兼容）。"""
+    subs = _subscribers.get(task_id)
+    if subs is None:
+        return
+    if q is None:
+        _subscribers.pop(task_id, None)
+        return
+    subs.pop(q, None)
+    if not subs:
+        _subscribers.pop(task_id, None)
 
 
 def _emit(task_id: str, status: str, data=None, *, phase: str | None = None, progress_pct: int | None = None) -> None:
-    q = _subscribers.get(task_id)
-    if q is not None:
-        msg = {"status": status, "data": data}
-        if phase is not None:
-            msg["phase"] = phase
-        if progress_pct is not None:
-            msg["progress_pct"] = progress_pct
-        q.put_nowait(msg)
+    subs = _subscribers.get(task_id)
+    if not subs:
+        return
+    msg = {"status": status, "data": data}
+    if phase is not None:
+        msg["phase"] = phase
+    if progress_pct is not None:
+        msg["progress_pct"] = progress_pct
+    for q, loop in list(subs.items()):
+        try:
+            if loop is not None:
+                # worker 线程跨线程推送：线程安全地交给订阅者所在事件循环
+                loop.call_soon_threadsafe(q.put_nowait, msg)
+            else:
+                q.put_nowait(msg)
+        except (RuntimeError, Exception):  # noqa: BLE001 - loop 已关闭等
+            pass
 
 
 def recover_interrupted() -> None:
@@ -70,8 +97,8 @@ def _safe_error_text(e: Exception) -> str:
     msg = str(e)
     for s in _SENSITIVE:
         if s.lower() in msg.lower():
-            msg = msg.replace(msg, "[已脱敏的错误信息]")
-            break
+            # 仅把敏感词本身替换为脱敏标记，保留前后上下文（如"第几步失败"）
+            msg = re.sub(re.escape(s), "[已脱敏]", msg, flags=re.IGNORECASE)
     msg = _PATH_RE.sub("[path]", msg)
     return (msg or e.__class__.__name__)[:1500]
 
@@ -99,6 +126,8 @@ def _classify_error(e: Exception, current_phase: str | None = None) -> tuple[str
     仅当错误文本关键词能定位到「不早于当前阶段」的更具体步骤时才采用，
     例如导出阶段报 docx 错误、整理阶段报 contract 错误，避免倒退误报。
     """
+    if getattr(e, "code", None) == "quality_gate":
+        return e.__class__.__name__, "quality_gate"
     msg = str(e).lower()
     forced: str | None = None
     if "diagram" in msg or "network" in msg:
@@ -256,7 +285,7 @@ def _process(task_id: str) -> None:
             llm = create_llm_from_config(llm_config)
             gen = ReportGenerator(
                 llm, analysis_type=analysis_type, mode="llm", llm_config=llm_config,
-                web_mode=web_on, materials=bundle_dict,
+                structured=structured, web_mode=web_on, materials=bundle_dict,
             )
 
         # on_phase 回调由 generator 在 generate/export 关键节点调用
@@ -297,6 +326,9 @@ def _process(task_id: str) -> None:
             t.llm_temperature = safe.get("llm_temperature")
             t.prompt_version = safe.get("prompt_version")
             t.llm_raw_response = raw_response
+            quality = safe.get("quality") or None
+            t.quality_score = quality.get("score") if isinstance(quality, dict) else None
+            t.quality_result = quality
             db.commit()
             # 阶段六·需求1：自动生成项目完成记录（日志）。若任务已归属某项目则更新其
             # 摘要/完成时间；否则按「每篇报告=一个已完成项目」自动建档，确保每次分析
@@ -314,6 +346,11 @@ def _process(task_id: str) -> None:
                 t.error_type = etype
                 t.error_phase = ephase
                 t.error_detail = err_msg
+                quality_result = getattr(e, "result", None)
+                if quality_result is not None:
+                    quality = quality_result.model_dump()
+                    t.quality_score = quality.get("score")
+                    t.quality_result = quality
                 db.commit()
         # 注意：必须在上面 with 块关闭前把要推送的字段取到局部变量；
         # 否则 t 已脱离 Session，访问 t.error 会抛 DetachedInstanceError，
@@ -408,7 +445,10 @@ async def _worker(worker_id: int) -> None:
                     t.status = "generating"
                     db.commit()
         if tid is not None:
-            await asyncio.to_thread(_process, tid)
+            try:
+                await asyncio.to_thread(_process, tid)
+            except Exception:  # noqa: BLE001 - 单任务失败绝不能拖死整个 worker 池
+                logger.exception("worker %s 处理任务 %s 时异常（已跳过，继续接单）", worker_id, tid)
         else:
             await asyncio.sleep(1.0)
 
