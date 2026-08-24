@@ -9,11 +9,18 @@
 LLM 客户端可替换（DeepSeek / OpenAI / Mock），generator 本身不关心具体模型。
 """
 import os
+import json
 import re
+import time
 
 from app.prompt_builder import build_system_prompt
 from app.engine_bridge import export_report
 from app import rule_engine
+from app.report_quality import (
+    ReportQualityError,
+    ReportQualityResult,
+    evaluate_report_quality,
+)
 
 
 def _truncate(text: str | None, limit: int = 64000) -> str | None:
@@ -80,7 +87,7 @@ class ReportGenerator:
         if mctx:
             extra.append(mctx)
         extra.append(
-            "引用约束：正文中引用任何素材事实时，必须以内联 Markdown 链接 [名称](url) 标注出处；"
+            "引用约束：正文事实条目仅写「（来源：名称）」；不要在正文堆叠 URL 或整段复述素材。"
             "报告末尾附录使用「[名称](url)」可点击格式，禁止裸 URL 或无链接媒体名。"
         )
         if src_appendix:
@@ -111,10 +118,61 @@ class ReportGenerator:
             title=title or "", analysis_type=self.analysis_type, event=input_text or ""
         )
 
+    def _used_web_sources(self) -> bool:
+        return bool(self._coerce_bundle(self.materials).sources)
+
+    def _attach_source_appendix(self, markdown: str) -> str:
+        bundle = self._coerce_bundle(self.materials)
+        if not bundle.sources:
+            return markdown
+        from app.materials import format_source_appendix
+
+        appendix = format_source_appendix(bundle.sources).strip()
+        if not appendix or appendix in markdown:
+            return markdown
+        copyright_pos = markdown.find("分析框架：三元结构理论")
+        if copyright_pos >= 0:
+            return (
+                markdown[:copyright_pos].rstrip()
+                + "\n\n"
+                + appendix
+                + "\n\n"
+                + markdown[copyright_pos:]
+            )
+        return markdown.rstrip() + "\n\n" + appendix + "\n"
+
+    def _evaluate_quality(self, markdown: str) -> ReportQualityResult:
+        result = evaluate_report_quality(
+            markdown,
+            analysis_type=self.analysis_type,
+            used_web_sources=self._used_web_sources(),
+        )
+        self._last_quality = result
+        return result
+
+    @staticmethod
+    def _quality_revision_prompt(markdown: str, result: ReportQualityResult) -> str:
+        problems = "\n".join(
+            f"- {issue.code}: {issue.message}"
+            for issue in result.issues
+            if issue.severity == "error"
+        )
+        return (
+            "以下报告未通过质量闸门，请只修复列出的问题，不添加未经材料支持的事实。\n\n"
+            f"质量问题：\n{problems}\n\n"
+            f"待修订完整报告：\n\n{markdown}\n\n"
+            "请返回修订后的完整 Markdown，不要解释，不要用代码围栏包裹整篇。"
+        )
+
     def generate(self, input_text: str = "", title: str | None = None) -> str:
         if self.mode == "rule":
             si = self._build_structured(input_text, title)
             md = rule_engine.generate(si)
+            md = self._normalize(md, title)
+            md = self._attach_source_appendix(md)
+            quality = self._evaluate_quality(md)
+            if not quality.valid:
+                raise ReportQualityError(quality)
             self._last_contract = {
                 "valid": True,
                 "diagram_ok": True,
@@ -126,6 +184,7 @@ class ReportGenerator:
                 "engine_used": "rule",
                 "degraded_from_llm": False,
                 "degrade_reason": None,
+                "quality": quality.model_dump(),
             }
             self._engine_meta = {
                 "engine_used": "rule",
@@ -136,7 +195,7 @@ class ReportGenerator:
                 "degrade_reason": None,
                 "raw_response": None,
             }
-            return self._normalize(md, title)
+            return md
 
         # —— LLM 增强模式 ——
         from app.contract import validate_and_repair
@@ -146,13 +205,14 @@ class ReportGenerator:
 
         cfg = resolve_config(self.llm_config)
         llm = create_llm_from_config(self.llm_config)
+        self._generation_llm = llm
 
         # 无可用密钥 → 没有 LLM 可用，直接降级到规则引擎（核心不依赖 LLM）
         if isinstance(llm, MockClient):
             reason = (
                 "未配置 LLM 密钥（请到设置页填写，或用 backend/.env 配置），已使用规则引擎"
             )
-            return self._degrade_to_rule(input_text, title, reason)
+            return self._fallback_or_raise(input_text, title, reason)
 
         system = build_system_prompt(self.analysis_type)
         user = self._build_user_prompt(input_text, title, self.materials)
@@ -161,19 +221,48 @@ class ReportGenerator:
         except Exception as e:  # noqa: BLE001
             # LLMError（限流/鉴权/余额/超时/连接）或任何调用异常 → 降级
             msg = getattr(e, "message", None) or str(e)
-            return self._degrade_to_rule(
+            return self._fallback_or_raise(
                 input_text, title, f"LLM 调用失败：{msg}"
             )
-        md = self._normalize(raw, title)
-        si = (
-            self.structured
-            if isinstance(self.structured, rule_engine.StructuredInput)
-            else None
-        )
-        md, contract = validate_and_repair(md, self.analysis_type, si)
-        if contract.get("degrade"):
-            reason = "LLM 输出不符合契约（缺少可用利益关系图且必要章节缺失），已自动降级到规则引擎"
-            return self._degrade_to_rule(input_text, title, reason, raw=raw)
+        candidate_raw = raw
+        contract = None
+        quality = None
+        md = ""
+        for attempt in range(3):
+            md = self._normalize(candidate_raw, title)
+            md, contract = validate_and_repair(
+                md, self.analysis_type, self.structured
+            )
+            if not contract.get("degrade"):
+                quality = self._evaluate_quality(md)
+                if quality.valid:
+                    break
+            if attempt >= 2:
+                if contract.get("degrade"):
+                    reason = "LLM 输出连续三次不符合结构契约，无法形成正式报告"
+                    return self._fallback_or_raise(
+                        input_text, title, reason, raw=candidate_raw
+                    )
+                raise ReportQualityError(quality)
+            if contract.get("degrade"):
+                problems = "\n".join(f"- {error}" for error in contract.get("errors", []))
+                revision_user = (
+                    "以下报告不符合结构契约，请修复列出的问题并返回完整 Markdown。\n\n"
+                    f"契约问题：\n{problems}\n\n待修订报告：\n\n{md}"
+                )
+            else:
+                revision_user = self._quality_revision_prompt(md, quality)
+            try:
+                candidate_raw = llm.generate(
+                    system,
+                    revision_user,
+                    temperature=min(cfg["temperature"] + 0.1 * (attempt + 1), 1.0),
+                )
+            except Exception as exc:  # noqa: BLE001
+                msg = getattr(exc, "message", None) or str(exc)
+                return self._fallback_or_raise(
+                    input_text, title, f"LLM 定向修订失败：{msg}", raw=candidate_raw
+                )
 
         # LLM 成功且契约可用
         contract["mode"] = "llm"
@@ -181,6 +270,7 @@ class ReportGenerator:
         contract["degraded_from_llm"] = False
         contract["degrade_reason"] = None
         contract["prompt_version"] = cfg["prompt_version"]
+        contract["quality"] = quality.model_dump()
         self._last_contract = contract
         self._engine_meta = {
             "engine_used": "llm",
@@ -216,6 +306,7 @@ class ReportGenerator:
 
         cfg = resolve_config(self.llm_config)
         llm = create_llm_from_config(self.llm_config)
+        self._generation_llm = llm
         if isinstance(llm, MockClient):
             raise ValueError(
                 "未配置 LLM 密钥，AI 再改不可用（请到设置页填写，或用 backend/.env 配置）"
@@ -253,6 +344,44 @@ class ReportGenerator:
             except Exception:  # noqa: BLE001
                 pass
 
+        quality = None
+        if not contract.get("type_mismatch") and not contract.get("degrade"):
+            quality = self._evaluate_quality(md)
+        for attempt in range(2):
+            if quality is not None and quality.valid:
+                break
+            if quality is None:
+                problems = "\n".join(
+                    f"- {error}" for error in contract.get("errors", [])
+                )
+                revision_user = (
+                    "以下修订稿不符合结构契约，请修复问题并返回完整 Markdown。\n\n"
+                    f"契约问题：\n{problems}\n\n待修订报告：\n\n{md}"
+                )
+            else:
+                revision_user = self._quality_revision_prompt(md, quality)
+            try:
+                raw = llm.generate(
+                    system,
+                    revision_user,
+                    temperature=min(cfg["temperature"] + 0.1 * (attempt + 1), 1.0),
+                )
+            except Exception as exc:  # noqa: BLE001
+                msg = getattr(exc, "message", None) or str(exc)
+                raise ValueError(f"AI 再改质量修订失败：{msg}") from exc
+            md = self._normalize(raw, title)
+            md, contract = validate_and_repair(md, self.analysis_type, None)
+            quality = (
+                None
+                if contract.get("type_mismatch") or contract.get("degrade")
+                else self._evaluate_quality(md)
+            )
+        if quality is None or not quality.valid:
+            if quality is not None:
+                raise ReportQualityError(quality)
+            raise ValueError("AI 再改连续三次不符合结构契约")
+
+        contract["quality"] = quality.model_dump()
         self._last_contract = contract
         self._engine_meta = {
             "engine_used": "llm",
@@ -264,6 +393,33 @@ class ReportGenerator:
             "raw_response": None,
         }
         return md
+
+    def enrich(
+        self,
+        previous_markdown: str,
+        instruction: str,
+        title: str | None = None,
+    ) -> str:
+        """Update a report from newly supplied evidence while preserving its structure."""
+        from app.materials import format_materials_context, format_source_appendix
+
+        bundle = self._coerce_bundle(self.materials)
+        context = format_materials_context(bundle)
+        if not context:
+            raise ValueError("没有可供核验的新增材料，未创建补充版本")
+        appendix = format_source_appendix(bundle.sources)
+        evidence_instruction = (
+            "这是一次证据补充，不是另写一篇报告。只修改新增材料能够支持或推翻的事实、"
+            "判断、关系与资料缺口；保留无关章节和原有结构。区分事实、来源观点、系统推断"
+            "和用户信息；找不到依据的关系不得升格为事实。新增或变更的重要判断必须能回溯"
+            "到下面的材料。\n\n"
+            f"用户本轮要求：{instruction or '核验并补充当前报告的证据缺口'}\n\n"
+            f"新增研究材料：\n{context}"
+        )
+        if appendix:
+            evidence_instruction += "\n\n新增来源附录（保留可点击链接）：\n" + appendix
+        markdown = self.revise(previous_markdown, evidence_instruction, title)
+        return self._attach_source_appendix(markdown)
 
     def _degrade_to_rule(
         self, input_text: str, title: str | None, reason: str, raw: str | None = None
@@ -277,6 +433,10 @@ class ReportGenerator:
         si = self._build_structured(input_text, title)
         md = rule_engine.generate(si)
         md = self._normalize(md, title)
+        md = self._attach_source_appendix(md)
+        quality = self._evaluate_quality(md)
+        if not quality.valid:
+            raise ReportQualityError(quality)
         self._last_contract = {
             "valid": True,
             "diagram_ok": True,
@@ -289,6 +449,7 @@ class ReportGenerator:
             "degraded_from_llm": True,
             "degrade_reason": reason,
             "prompt_version": PROMPT_VERSION,
+            "quality": quality.model_dump(),
         }
         self._engine_meta = {
             "engine_used": "rule",
@@ -301,6 +462,16 @@ class ReportGenerator:
         }
         return md
 
+    def _fallback_or_raise(
+        self, input_text: str, title: str | None, reason: str, raw: str | None = None
+    ) -> str:
+        if self.structured is None:
+            raise ValueError(
+                "自由输入的 LLM 生成失败，且没有可供规则引擎接管的结构化数据："
+                + reason
+            )
+        return self._degrade_to_rule(input_text, title, reason, raw=raw)
+
     def extract_network(self, markdown: str) -> dict:
         """从已生成的 Markdown 中抽取「利益关系网络（DIAGRAM）」区块。
 
@@ -312,6 +483,179 @@ class ReportGenerator:
         m = re.search(r"```DIAGRAM\s*\n(.*?)\n```", markdown, re.IGNORECASE | re.DOTALL)
         diagram = m.group(1).strip() if m else None
         return {"diagram": diagram, "valid": bool(diagram)}
+
+    def _research_source_catalog(self, markdown: str) -> list[dict]:
+        """Number only sources already present in materials or the final report."""
+        bundle = self._coerce_bundle(self.materials)
+        item_by_url = {}
+        entries: list[dict] = []
+        for item in bundle.items:
+            if not isinstance(item, dict) or not item.get("kept", True):
+                continue
+            url = str(item.get("url") or "")
+            material_id = str(item.get("material_id") or "") or None
+            identity = url or (f"material:{material_id}" if material_id else "")
+            if not identity:
+                continue
+            item_by_url[identity] = item
+            entries.append(
+                {
+                    "title": str(item.get("title") or url or "本地材料"),
+                    "url": url,
+                    "material_id": material_id,
+                    "identity": identity,
+                }
+            )
+        for source in bundle.sources:
+            title = getattr(source, "title", None) or (
+                source.get("title") if isinstance(source, dict) else ""
+            )
+            url = getattr(source, "url", None) or (
+                source.get("url") if isinstance(source, dict) else ""
+            )
+            if url:
+                entries.append(
+                    {"title": title or url, "url": url, "material_id": None, "identity": url}
+                )
+        for title, url in re.findall(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", markdown or ""):
+            clean_url = url.strip()
+            entries.append(
+                {
+                    "title": title.strip() or clean_url,
+                    "url": clean_url,
+                    "material_id": None,
+                    "identity": clean_url,
+                }
+            )
+
+        catalog: list[dict] = []
+        seen: set[str] = set()
+        for entry in entries:
+            identity = entry["identity"]
+            if not identity or identity in seen:
+                continue
+            seen.add(identity)
+            item = item_by_url.get(identity) or item_by_url.get(entry["url"]) or {}
+            catalog.append(
+                {
+                    "id": f"s{len(catalog) + 1}",
+                    "title": entry["title"],
+                    "url": entry["url"],
+                    "excerpt": str(item.get("text") or item.get("snippet") or "")[:700],
+                    "source_type": "user_material" if entry["material_id"] else "unknown",
+                    "source_level": "user" if entry["material_id"] else "unknown",
+                    "material_id": entry["material_id"],
+                }
+            )
+        return catalog
+
+    def build_research_ledger(self, markdown: str, input_text: str = ""):
+        """Create the validated evidence-to-judgment snapshot for a report."""
+        from app.research_ledger import (
+            build_fallback_ledger,
+            normalize_research_ledger,
+            parse_research_payload,
+        )
+
+        fallback_input = input_text
+        if not fallback_input and self.structured is not None:
+            fallback_input = getattr(self.structured, "event", "") or ""
+        if isinstance(self.structured, dict) and not fallback_input:
+            fallback_input = str(self.structured.get("event") or "")
+        fallback_bundle = self._coerce_bundle(self.materials)
+        fallback_materials = {
+            "items": fallback_bundle.items,
+            "sources": fallback_bundle.sources,
+        }
+
+        llm = getattr(self, "_generation_llm", None)
+        engine_used = (getattr(self, "_engine_meta", None) or {}).get("engine_used")
+        if self.mode != "llm" or engine_used != "llm" or llm is None:
+            return build_fallback_ledger(
+                markdown=markdown,
+                materials=fallback_materials,
+                input_text=fallback_input,
+                reason="当前生成路径未执行结构化证据提取",
+            )
+
+        catalog = self._research_source_catalog(markdown)
+        if not catalog:
+            return build_fallback_ledger(
+                markdown=markdown,
+                materials=fallback_materials,
+                input_text=fallback_input,
+                reason="当前没有可核验来源，已跳过结构化证据提取",
+            )
+        system = (
+            "你是研究证据整理器。只返回 JSON 对象，不要 Markdown 或解释。"
+            "只能引用给定来源索引中的 source id，不得新增来源。"
+            "区分 fact、source_view、inference、user_input；没有直接证据的判断必须标为 inference。"
+            "置信度只能是 high、medium、low、unknown，不得编造百分比。"
+            "输出字段：sources, claims, nodes, relations, timeline, gaps, analogues, "
+            "counterfactuals, quantitative_observations。"
+            "claim 包含 id,text,claim_type,significance,confidence,confidence_reasons,evidence_ids,"
+            "counter_evidence_ids,section。"
+            "node 包含 id,label,aliases,role,interests,stance,weight,confidence,evidence_ids,"
+            "first_seen,last_seen,stance_history；weight 只能是 0 到 1，未知时用 0.5。"
+            "relation 包含 id,source_node,target_node,label,relation_type,strength,interest_types,"
+            "direction,polarity,confidence,evidence_ids,claim_id,status,valid_from,valid_to；"
+            "strength 只能是 1 到 5，未知时用 1。"
+            "timeline 包含 id,date,title,detail,event_type,actor_ids,claim_ids,evidence_ids,"
+            "confidence,turning_point；没有可靠日期时 date 为 null。"
+            "gap 包含 id,question,reason,impact,recommended_materials,priority,material_type；"
+            "priority 只能是 critical、high、medium、low。"
+            "analogue 包含 id,title,summary,period,jurisdiction,domain,similarities,differences,"
+            "response,outcome,relevance_reason,evidence_ids,comparability,confidence,confidence_reasons；"
+            "只收录来源索引确实支持的历史案例，没有可靠对照时返回空数组。"
+            "counterfactual 包含 id,premise,changed_condition,baseline_outcome,alternative_outcome,"
+            "causal_chain,supporting_claim_ids,evidence_ids,assumptions,invalidation_signals,"
+            "confidence,confidence_reasons,status；status 只能是 evidence_based、modelled、insufficient。"
+            "反事实必须写清假设和失效信号，不得生成百分比概率。"
+            "quantitative_observation 包含 id,metric_name,value,unit,observed_at,period_start,"
+            "period_end,scope,methodology,formula,evidence_ids,status,caveats,confidence；"
+            "status 只能是 observed、derived、unknown、conflicted。外部观测值必须绑定来源，"
+            "派生值必须同时绑定来源并给出可复算公式；无法获得时 value 为 null、status 为 unknown。"
+            "主体、关系、时间事件没有证据时必须降低置信度，不得根据常识补造。"
+        )
+        user = (
+            "来源索引（ID 与 URL 不可修改）：\n"
+            + json.dumps(catalog, ensure_ascii=False)
+            + "\n\n用户原始输入：\n"
+            + (fallback_input or "（无）")[:6000]
+            + "\n\n最终报告：\n"
+            + (markdown or "")[:48000]
+        )
+        last_error = ""
+        for attempt in range(2):
+            try:
+                raw = llm.generate(system, user, temperature=0.1)
+                payload = parse_research_payload(raw)
+                proposed_sources = {
+                    str(source.get("id") or ""): source
+                    for source in payload.get("sources") or []
+                    if isinstance(source, dict)
+                }
+                # Source identity is owned by the application, not by the model.
+                reconciled_sources = []
+                for source in catalog:
+                    proposed = proposed_sources.get(source["id"], {})
+                    if proposed.get("url") not in (None, "", source["url"]):
+                        proposed = {}
+                    reconciled_sources.append({**source, **proposed, "id": source["id"], "url": source["url"], "title": source["title"]})
+                payload["sources"] = reconciled_sources
+                return normalize_research_ledger(payload)
+            except Exception as exc:  # noqa: BLE001
+                last_error = str(exc)
+                user = (
+                    "上一次输出不是符合要求的 JSON 对象。请只返回完整 JSON；"
+                    "不要增加来源，不要解释。\n\n原始任务：\n" + user
+                )
+        return build_fallback_ledger(
+            markdown=markdown,
+            materials=fallback_materials,
+            input_text=fallback_input,
+            reason=f"结构化证据提取失败：{last_error or '未知错误'}",
+        )
 
     def validate(self, markdown: str | None = None, title: str | None = None) -> dict:
         """契约校验里程碑（进度链第 5 步「整理分析结果」）。
@@ -335,6 +679,13 @@ class ReportGenerator:
             "degraded_from_llm": False,
             "degrade_reason": None,
         }
+
+    def quality(self) -> ReportQualityResult:
+        return getattr(self, "_last_quality", None) or ReportQualityResult(
+            valid=False,
+            score=0,
+            issues=[],
+        )
 
     def export(
         self,
@@ -407,19 +758,43 @@ class ReportGenerator:
                     pass
 
         _safe_phase("decompose", 25)
+        started = time.monotonic()
+        stage_started = started
         md = self.generate(input_text, title)
+        generate_seconds = time.monotonic() - stage_started
         _safe_phase("network", 55)
+        stage_started = time.monotonic()
         network = self.extract_network(md)
+        network_seconds = time.monotonic() - stage_started
+        stage_started = time.monotonic()
+        research = self.build_research_ledger(md, input_text)
+        research_seconds = time.monotonic() - stage_started
         _safe_phase("organize", 75)
+        stage_started = time.monotonic()
         contract = self.validate(md, title)
+        quality = self.quality()
+        organize_seconds = time.monotonic() - stage_started
         _safe_phase("output", 85)
-        exp = self.export(md, title, output_dir, slug)
+        stage_started = time.monotonic()
+        exp = None
+        for attempt in range(2):
+            try:
+                exp = self.export(md, title, output_dir, slug)
+                break
+            except Exception:  # noqa: BLE001
+                if attempt == 0:
+                    time.sleep(0.5)
+                    continue
+                raise
+        export_seconds = time.monotonic() - stage_started
         # 合并：Markdown 原文 + 网络图抽取 + 契约校验 + 引擎导出结果 + 引擎元信息
         meta = getattr(self, "_engine_meta", None) or {}
         return {
             "markdown": md,
             "network": network,
+            "research": research.model_dump(),
             "contract": contract,
+            "quality": quality.model_dump(),
             # —— 阶段四：标注本次报告由哪个引擎生成，是否从 LLM 降级 ——
             "engine_used": meta.get("engine_used"),
             "degraded_from_llm": meta.get("degraded_from_llm", False),
@@ -427,6 +802,14 @@ class ReportGenerator:
             "prompt_version": meta.get("prompt_version"),
             "llm_model": meta.get("llm_model"),
             "llm_temperature": meta.get("llm_temperature"),
+            "timings": {
+                "generate_seconds": round(generate_seconds, 3),
+                "network_seconds": round(network_seconds, 3),
+                "research_seconds": round(research_seconds, 3),
+                "organize_seconds": round(organize_seconds, 3),
+                "export_seconds": round(export_seconds, 3),
+                "pipeline_seconds": round(time.monotonic() - started, 3),
+            },
             # raw_response 仅落库（Task.llm_raw_response），不进前端响应
             "raw_response": meta.get("raw_response"),
             **exp,

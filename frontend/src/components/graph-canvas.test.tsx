@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import React, { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { DiagramDocument } from "@/lib/report-graph";
-import { buildGraphOptions, GraphCanvas } from "./graph-canvas";
+import { buildGraphData, buildGraphOptions, GraphCanvas } from "./graph-canvas";
 
 const networkMocks = vi.hoisted(() => {
   const handlers = new Map<string, (payload: { nodes?: string[]; edges?: string[] }) => void>();
@@ -46,6 +46,18 @@ describe("buildGraphOptions", () => {
 });
 
 describe("GraphCanvas", () => {
+  it("maps analytical weight and relation state into visual emphasis", () => {
+    const data = buildGraphData({
+      ...baseDiagram,
+      nodes: [{ ...baseDiagram.nodes[0], weight: 0.9 }, baseDiagram.nodes[1]],
+      edges: [{ ...baseDiagram.edges[0], strength: 5, polarity: "negative", relationStatus: "inferred", direction: "mutual" }],
+    });
+
+    expect(data.nodes[0]).toMatchObject({ value: 28, mass: 2.8 });
+    expect(data.edges[0]).toMatchObject({ width: 4.25, dashes: [7, 5], arrows: { from: { enabled: true }, to: { enabled: true } } });
+    expect(String(data.edges[0].title)).toContain("强度：5/5");
+  });
+
   it("forwards graph selections and destroys the runtime on unmount", () => {
     const onSelectionChange = vi.fn();
     const view = render(<GraphCanvas diagram={baseDiagram} onSelectionChange={onSelectionChange} />);

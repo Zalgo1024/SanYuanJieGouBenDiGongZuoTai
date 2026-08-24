@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   defaultSettings,
   type AnalysisTask,
@@ -19,6 +19,7 @@ type AppAction =
   | { type: "UPSERT_TASK"; task: AnalysisTask }
   | { type: "UPSERT_REPORT"; report: Report }
   | { type: "REMOVE_REPORTS"; reportIds: string[] }
+  | { type: "REMOVE_TASKS"; taskIds: string[] }
   | { type: "UPDATE_TASK_PROGRESS"; taskId: string; status: AnalysisTask["status"]; phase: AnalysisTask["phase"]; progress: number; updatedAt: string }
   | { type: "UPDATE_SETTINGS"; settings: Partial<WorkspaceSettings> };
 
@@ -55,7 +56,11 @@ export function parseStoredSettings(raw: string | null): WorkspaceSettings {
     const parsed = JSON.parse(raw) as StoredPreferences;
     const settings = parsed.settings ?? {};
     return {
-      defaultEngine: settings.defaultEngine === "llm" ? "llm" : "rule",
+      defaultEngine: settings.defaultEngine === "llm"
+        ? "llm"
+        : settings.defaultEngine === "rule"
+          ? "rule"
+          : "auto",
       theme: settings.theme === "dark" ? "dark" : "light",
       defaultExport: settings.defaultExport === "html" ? "html" : "markdown",
     };
@@ -108,6 +113,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     const ids = new Set(action.reportIds);
     return { ...state, reports: state.reports.filter((report) => !ids.has(report.id)) };
   }
+  if (action.type === "REMOVE_TASKS") {
+    // 删除报告时后端已级联删除对应 Task，前端同步移除，避免残留幽灵任务
+    const ids = new Set(action.taskIds);
+    return { ...state, tasks: state.tasks.filter((task) => !ids.has(task.id)) };
+  }
   if (action.type === "UPDATE_TASK_PROGRESS") {
     return {
       ...state,
@@ -140,6 +150,8 @@ export function AppStoreProvider({
 }) {
   const demo = demoMode ?? process.env.NEXT_PUBLIC_DEMO_MODE === "1";
   const [state, dispatch] = useReducer(appReducer, initialState ?? createInitialState(demo));
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [hydrated, setHydrated] = useState(Boolean(initialState) || demo);
   const [connection, setConnection] = useState<ConnectionState>(demo ? "demo" : initialState ? "online" : "checking");
   const [connectionError, setConnectionError] = useState("");
@@ -163,7 +175,7 @@ export function AppStoreProvider({
   }, [demo]);
 
   const loadTask = useCallback(async (taskId: string) => {
-    if (demo) return state.tasks.find((task) => task.id === taskId) ?? null;
+    if (demo) return stateRef.current.tasks.find((task) => task.id === taskId) ?? null;
     try {
       const task = await fetchTaskById(taskId);
       if (task) dispatch({ type: "UPSERT_TASK", task });
@@ -175,12 +187,12 @@ export function AppStoreProvider({
       setConnectionError(errorMessage(reason));
       return null;
     }
-  }, [demo, state.tasks]);
+  }, [demo]);
 
   const loadReport = useCallback(async (taskId: string) => {
-    if (demo) return state.reports.find((report) => report.taskId === taskId) ?? null;
+    if (demo) return stateRef.current.reports.find((report) => report.taskId === taskId) ?? null;
     try {
-      let task = state.tasks.find((candidate) => candidate.id === taskId) ?? null;
+      let task = stateRef.current.tasks.find((candidate) => candidate.id === taskId) ?? null;
       if (!task) {
         task = await fetchTaskById(taskId);
         if (task) dispatch({ type: "UPSERT_TASK", task });
@@ -196,7 +208,7 @@ export function AppStoreProvider({
       setConnectionError(errorMessage(reason));
       return null;
     }
-  }, [demo, state.reports, state.tasks]);
+  }, [demo]);
 
   useEffect(() => {
     if (initialState || demo) return;
@@ -230,6 +242,8 @@ export function AppStoreProvider({
     deleteReports(reportIds) {
       if (!reportIds.length) return;
       dispatch({ type: "REMOVE_REPORTS", reportIds });
+      // 后端 DELETE /api/reports/{id} 会级联删除对应 Task，前端同步移除
+      dispatch({ type: "REMOVE_TASKS", taskIds: reportIds });
       setNotice(`已删除 ${reportIds.length} 份报告`);
     },
     updateTaskProgress(taskId, update) {

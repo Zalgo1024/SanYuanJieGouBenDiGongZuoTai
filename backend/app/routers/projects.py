@@ -142,6 +142,8 @@ def _cleanup_task_files(task_row) -> int:
     if res.get("pdf") and os.path.exists(res["pdf"]):
         candidates.append(res["pdf"])
     for d in res.get("diagrams") or []:
+        if not isinstance(d, dict):
+            continue
         for k in ("png", "html"):
             if d.get(k) and os.path.exists(d[k]):
                 candidates.append(d[k])

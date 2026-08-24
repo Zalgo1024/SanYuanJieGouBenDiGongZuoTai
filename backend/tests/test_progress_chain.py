@@ -46,7 +46,8 @@ def subbed():
 
     def reg(tid: str) -> _Collect:
         c = _Collect()
-        queue._subscribers[tid] = c
+        # 适配多订阅者结构：{queue: loop}；loop=None 表示同步调用方
+        queue._subscribers[tid] = {c: None}
         registered[tid] = c
         return c
 
@@ -59,6 +60,10 @@ def _insert_task(**kw) -> str:
     import app.db as dbmod
 
     tid = "t_" + uuid.uuid4().hex[:12]
+    mode = kw.get("mode", "rule")
+    structured = kw.get("structured")
+    if structured is None and mode == "rule":
+        structured = _valid_structured()
     with dbmod.SessionLocal() as db:
         db.add(
             Task(
@@ -66,7 +71,12 @@ def _insert_task(**kw) -> str:
                 title=kw.get("title", "阶段八验证任务"),
                 input_text=kw.get("input_text", "深圳赛格广场晃动事件"),
                 analysis_type=kw.get("analysis_type", "case"),
-                mode=kw.get("mode", "rule"),
+                mode=mode,
+                input_mode=kw.get(
+                    "input_mode", "structured" if structured is not None else "freeform"
+                ),
+                requested_engine=kw.get("requested_engine", mode),
+                structured=structured,
                 status=kw.get("status", "generating"),
                 search_enabled=kw.get("search_enabled", None),
                 web=kw.get("web", False),
@@ -74,6 +84,38 @@ def _insert_task(**kw) -> str:
         )
         db.commit()
     return tid
+
+
+def _valid_structured() -> dict:
+    return {
+        "title": "阶段八验证任务",
+        "analysis_type": "case",
+        "event": "某地发生一项涉及公共机构和服务对象的规则调整。",
+        "actors": [
+            {"name": "公共机构", "interest_types": ["public"]},
+            {"name": "服务对象", "interest_types": ["material"]},
+        ],
+        "relations": [
+            {
+                "source": "公共机构",
+                "target": "服务对象",
+                "label": "规则执行",
+                "type": "power",
+            }
+        ],
+        "evidence": [
+            {
+                "content": "公开文件记录了该规则调整。",
+                "source": "https://example.com/source",
+            }
+        ],
+        "recommendations": [
+            {
+                "target": "公共机构",
+                "action": "公开规则依据和反馈渠道。",
+            }
+        ],
+    }
 
 
 def _run(tid: str, timeout: int = 60) -> list[str]:
@@ -343,3 +385,113 @@ def test_search_settings_endpoint(client, monkeypatch):
     assert body["configured"] is True
     assert body["provider"] == "mock"
     assert "search_api_key" not in body  # 绝不泄露明文 key
+
+
+def test_recover_interrupted_resets_stuck_generating(client, monkeypatch):
+    """崩溃恢复：启动时把卡在 generating 的孤儿任务重置回 queued，由工人重新接单。"""
+    import app.queue as queue
+    from app.db import SessionLocal
+
+    tid = _insert_task(input_text="某任务", status="generating", mode="rule")
+    queue.recover_interrupted()
+
+    with SessionLocal() as db:
+        t = db.get(Task, tid)
+        assert t is not None
+        assert t.status == "queued", "generating 孤儿任务应被重置回 queued"
+
+
+def test_search_failure_degrades_without_crashing(client, subbed, mock_export, monkeypatch):
+    """联网检索抛异常时必须优雅降级（写 degraded 标记），绝不能让 _process 崩溃。
+
+    回归保护：曾因 queue 未定义 logger，此处 except 分支抛 NameError 使任务卡死。
+    """
+    import app.queue as queue
+    from app.db import SessionLocal
+
+    def boom(q, max_results=5):
+        raise RuntimeError("检索源挂了")
+
+    monkeypatch.setattr("app.search.search_web", boom)
+
+    tid = _insert_task(input_text="某事件", web=True)
+    coll = subbed(tid)
+    errs = _run(tid)
+    assert not errs, f"_process 不应因检索失败崩溃: {errs}"
+
+    with SessionLocal() as db:
+        t = db.get(Task, tid)
+        assert t.status == "done", t.status
+        assert t.search_results is not None
+        degraded = t.search_results.get("degraded") if isinstance(t.search_results, dict) else None
+        assert degraded, "应写入降级标记，而非静默吞掉失败"
+    assert not any(m.get("status") == "error" for m in coll.items)
+
+
+def test_structured_llm_task_passes_rule_fallback_payload(
+    client, subbed, monkeypatch
+):
+    import app.queue as queue
+
+    captured = {}
+
+    class FakeGenerator:
+        def __init__(self, llm, **kwargs):
+            captured.update(kwargs)
+
+        def generate_and_export(self, input_text, title, output_dir, slug=None, on_phase=None):
+            for phase, pct in (
+                ("decompose", 25),
+                ("network", 55),
+                ("organize", 75),
+                ("output", 85),
+            ):
+                on_phase(phase, pct)
+            return {
+                "markdown": "## 一、测试\n\n正文内容。",
+                "network": {"nodes": [], "edges": []},
+                "engine_used": "llm",
+            }
+
+    monkeypatch.setattr(queue, "ReportGenerator", FakeGenerator)
+    monkeypatch.setattr("app.llm_client.create_llm_from_config", lambda config: object())
+
+    structured = _valid_structured()
+    tid = _insert_task(
+        mode="llm",
+        input_mode="structured",
+        requested_engine="llm",
+        structured=structured,
+    )
+    coll = subbed(tid)
+    errs = _run(tid)
+
+    assert not errs
+    assert captured["structured"] == structured
+    assert any(item.get("status") == "done" for item in coll.items)
+
+
+def test_quality_gate_failure_is_persisted_with_its_own_phase(
+    client, subbed, monkeypatch
+):
+    from app.db import SessionLocal
+
+    monkeypatch.setattr(
+        "app.rule_engine.generate",
+        lambda _structured: "# 失败报告\n\n## 结论\n\n（未提供分析）",
+    )
+    tid = _insert_task()
+    coll = subbed(tid)
+
+    _run(tid)
+
+    with SessionLocal() as db:
+        task = db.get(Task, tid)
+        assert task.status == "error"
+        assert task.error_phase == "quality_gate"
+        assert task.quality_result["valid"] is False
+        assert any(
+            issue["code"] == "failure_placeholder"
+            for issue in task.quality_result["issues"]
+        )
+    assert any(item.get("status") == "error" for item in coll.items)

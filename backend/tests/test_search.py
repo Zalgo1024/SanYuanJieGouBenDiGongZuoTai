@@ -3,13 +3,18 @@
 不依赖外网：DDG 解析用内嵌 HTML 夹具；降级用「显式 provider 但缺 Key」触发；
 真网检索只做可选冒烟（跳过不失败）。
 """
+import time
+
 from app.search import (
     SearchHit,
     SearchResult,
     _normalize_url,
     _parse_ddg_html,
     dedupe_hits,
+    derive_analogue_query,
+    fetch_and_clean,
     format_search_context,
+    search_primary_and_analogue,
     search_web,
 )
 
@@ -127,3 +132,58 @@ def test_format_search_context_hits_and_degraded():
     assert "检索源不可用" in ctx2  # 降级必须显式可见
 
     assert format_search_context(None) == ""
+
+
+def test_analogue_query_is_bounded_and_explicitly_asks_for_outcomes():
+    query = derive_analogue_query("分析某平台修改规则后引发用户抵制，官方随后发布回应" * 20)
+
+    assert len(query) <= 180
+    assert "类似案例" in query
+    assert "处理结果" in query
+
+
+def test_primary_search_failure_skips_redundant_analogue_search():
+    calls: list[str] = []
+
+    def fake_search(query: str, max_results: int):
+        calls.append(query)
+        return SearchResult(
+            query=query,
+            hits=[],
+            provider="duckduckgo",
+            degraded="检索源超时",
+        )
+
+    primary, analogue = search_primary_and_analogue(
+        "主查询",
+        "历史对照查询",
+        5,
+        search_fn=fake_search,
+        parallel=False,
+    )
+
+    assert primary.degraded
+    assert analogue is None
+    assert calls == ["主查询"]
+
+
+def test_fetch_and_clean_runs_concurrently_and_preserves_input_order(monkeypatch):
+    delays = {
+        "https://example.com/slow": 0.12,
+        "https://example.com/fast": 0.02,
+        "https://example.com/middle": 0.07,
+    }
+
+    def fake_get(url: str, timeout: int = 12, headers=None):
+        time.sleep(delays[url])
+        return f"<html><title>{url}</title><body>这是足够长的正文内容 {url}</body></html>"
+
+    monkeypatch.setattr("app.search._http_get", fake_get)
+    monkeypatch.setattr("app.search.clean_text", lambda html, url="": html)
+    urls = list(delays)
+    started = time.monotonic()
+    rows = fetch_and_clean(urls, max_workers=3)
+    elapsed = time.monotonic() - started
+
+    assert [row["url"] for row in rows] == urls
+    assert elapsed < 0.19

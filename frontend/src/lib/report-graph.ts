@@ -1,4 +1,4 @@
-import type { MaterialRecord } from "./domain";
+import type { MaterialRecord, ResearchBundle, ResearchNode, ResearchRelation } from "./domain";
 
 export type DiagramViz = "network" | "org" | "flow";
 
@@ -6,6 +6,11 @@ export interface DiagramNode {
   id: string;
   label: string;
   type: string;
+  weight?: number;
+  role?: string;
+  interests?: string[];
+  stance?: string;
+  confidence?: string;
 }
 
 export interface DiagramEdge {
@@ -14,6 +19,14 @@ export interface DiagramEdge {
   target: string;
   label: string;
   type: string;
+  researchRelationId?: string;
+  claimId?: string;
+  evidenceIds: string[];
+  strength?: number;
+  interestTypes?: string[];
+  direction?: string;
+  polarity?: string;
+  relationStatus?: ResearchRelation["status"];
 }
 
 export interface DiagramDocument {
@@ -67,6 +80,9 @@ interface RawEdge {
   to?: unknown;
   label?: unknown;
   type?: unknown;
+  relation_id?: unknown;
+  claim_id?: unknown;
+  evidence_ids?: unknown;
 }
 
 const diagramPattern = /```DIAGRAM\s*\r?\n([\s\S]*?)\r?\n```/gi;
@@ -79,6 +95,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()) : [];
 }
 
 function diagramBlocks(markdown: string): string[] {
@@ -138,6 +158,9 @@ function normalizeDiagram(rawText: string, index: number, warnings: GraphParseWa
       target,
       label: stringValue(item.label, "关系"),
       type,
+      researchRelationId: stringValue(item.relation_id) || undefined,
+      claimId: stringValue(item.claim_id) || undefined,
+      evidenceIds: stringArray(item.evidence_ids),
     });
   }
 
@@ -147,6 +170,53 @@ function normalizeDiagram(rawText: string, index: number, warnings: GraphParseWa
     viz,
     nodes,
     edges,
+  };
+}
+
+export function findResearchRelation(edge: DiagramEdge, research?: ResearchBundle): ResearchRelation | undefined {
+  if (!research) return undefined;
+  if (edge.researchRelationId) {
+    const byId = research.relations.find((relation) => relation.id === edge.researchRelationId);
+    if (byId) return byId;
+  }
+  if (edge.claimId) {
+    const byClaim = research.relations.find((relation) => relation.claimId === edge.claimId);
+    if (byClaim) return byClaim;
+  }
+  return research.relations.find((relation) => (
+    relation.sourceNode === edge.source
+    && relation.targetNode === edge.target
+    && relation.label === edge.label
+  )) ?? research.relations.find((relation) => (
+    relation.sourceNode === edge.source && relation.targetNode === edge.target
+  ));
+}
+
+export function findResearchNode(node: DiagramNode, research?: ResearchBundle): ResearchNode | undefined {
+  if (!research?.nodes?.length) return undefined;
+  return research.nodes.find((item) => item.id === node.id)
+    ?? research.nodes.find((item) => item.label === node.label || (item.aliases ?? []).includes(node.label));
+}
+
+export function enrichDiagramWithResearch(diagram: DiagramDocument, research?: ResearchBundle): DiagramDocument {
+  if (!research) return diagram;
+  return {
+    ...diagram,
+    nodes: diagram.nodes.map((node) => {
+      const profile = findResearchNode(node, research);
+      return profile ? { ...node, weight: profile.weight, role: profile.role, interests: profile.interests, stance: profile.stance, confidence: profile.confidence } : node;
+    }),
+    edges: diagram.edges.map((edge) => {
+      const relation = findResearchRelation(edge, research);
+      return relation ? {
+        ...edge,
+        strength: relation.strength,
+        interestTypes: relation.interestTypes,
+        direction: relation.direction,
+        polarity: relation.polarity,
+        relationStatus: relation.status,
+      } : edge;
+    }),
   };
 }
 

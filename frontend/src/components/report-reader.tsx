@@ -1,11 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Download, FileText, History, MessageSquarePlus, Network, RotateCcw, X } from "lucide-react";
+import { ArrowRight, Download, FilePlus2, FileText, History, MessageSquarePlus, Network, RotateCcw, X } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
-import { analysisTypes, type AnalysisTask, type Report } from "@/lib/domain";
-import { extractReportOutline, MarkdownReport } from "@/lib/markdown";
+import { analysisTypes, type AnalysisTask, type Report, type ResearchBundle, type ResearchChangeSet, type ResearchSnapshotStatus } from "@/lib/domain";
+import { parseReportPresentation, selectSectionsForReadingMode, type ReportReadingMode } from "@/lib/report-presentation";
 import { downloadReportArtifact, fetchReportVersion, rollbackReportVersion, type ReportArtifactKind } from "@/lib/report-delivery";
+import { fetchReportChanges } from "@/lib/research-changes";
+import { parseReportGraphs } from "@/lib/report-graph";
+import { ReportPresentation } from "./report-presentation";
+import { ReportOutline } from "./report-outline";
+import { ResearchChangesPanel } from "./research-changes-panel";
+import { ResearchLedger } from "./research-ledger";
+import { ResearchTimeline } from "./research-timeline";
+import { ResearchComparison } from "./research-comparison";
+import { QuantitativeEvidence } from "./quantitative-evidence";
+import { ResearchBenchmark } from "./research-benchmark";
+import { ReportEnrichmentLauncher } from "./report-enrichment-launcher";
 
 function formatDate(value: string) {
   const date = new Date(value);
@@ -58,6 +69,8 @@ export function ReportReader({ report, task, onReload }: { report: Report; task?
   const currentVersionId = report.currentVersionId || versions.find((item) => item.isCurrent)?.id || versions.at(-1)?.id || "";
   const [selectedVersionId, setSelectedVersionId] = useState(currentVersionId);
   const [historicalMarkdown, setHistoricalMarkdown] = useState("");
+  const [historicalResearch, setHistoricalResearch] = useState<ResearchBundle | undefined>();
+  const [historicalResearchStatus, setHistoricalResearchStatus] = useState<ResearchSnapshotStatus>("unavailable");
   const [loadingVersion, setLoadingVersion] = useState(false);
   const [versionError, setVersionError] = useState("");
   const [confirmRollback, setConfirmRollback] = useState(false);
@@ -65,18 +78,31 @@ export function ReportReader({ report, task, onReload }: { report: Report; task?
   const [rollbackNotice, setRollbackNotice] = useState("");
   const [downloading, setDownloading] = useState<ReportArtifactKind | "">("");
   const [downloadError, setDownloadError] = useState("");
+  const [readingMode, setReadingMode] = useState<ReportReadingMode>("standard");
+  const [researchChanges, setResearchChanges] = useState<ResearchChangeSet | undefined>();
+  const [changesError, setChangesError] = useState("");
+  const [enrichmentOpen, setEnrichmentOpen] = useState(false);
   const requestSequence = useRef(0);
 
   useEffect(() => {
     setSelectedVersionId(currentVersionId);
     setHistoricalMarkdown("");
+    setHistoricalResearch(undefined);
+    setHistoricalResearchStatus("unavailable");
     setConfirmRollback(false);
+    setResearchChanges(undefined);
+    setChangesError("");
   }, [currentVersionId, report.markdown]);
 
   const selectedVersion = versions.find((item) => item.id === selectedVersionId) ?? versions.find((item) => item.id === currentVersionId) ?? versions[versions.length - 1];
   const isCurrent = selectedVersionId === currentVersionId;
   const markdown = isCurrent ? report.markdown : historicalMarkdown;
-  const outline = extractReportOutline(markdown || report.markdown);
+  const renderedMarkdown = markdown || report.markdown;
+  const renderedResearch = isCurrent ? report.research : historicalResearch;
+  const renderedResearchStatus = isCurrent ? (report.researchStatus ?? "unavailable") : historicalResearchStatus;
+  const presentation = parseReportPresentation(renderedMarkdown, report.title);
+  const outline = selectSectionsForReadingMode(presentation.sections, readingMode).map((section) => ({ id: section.id, label: section.heading }));
+  if (parseReportGraphs(renderedMarkdown).diagrams.length) outline.push({ id: "report-inline-graphs", label: "关系图谱" });
 
   async function selectVersion(versionId: string) {
     const sequence = ++requestSequence.current;
@@ -85,6 +111,10 @@ export function ReportReader({ report, task, onReload }: { report: Report; task?
     setConfirmRollback(false);
     setSelectedVersionId(versionId);
     setHistoricalMarkdown("");
+    setHistoricalResearch(undefined);
+    setHistoricalResearchStatus("unavailable");
+    setResearchChanges(undefined);
+    setChangesError("");
     if (versionId === currentVersionId) {
       setHistoricalMarkdown("");
       setLoadingVersion(false);
@@ -93,7 +123,17 @@ export function ReportReader({ report, task, onReload }: { report: Report; task?
     setLoadingVersion(true);
     try {
       const version = await fetchReportVersion(report.taskId, versionId);
-      if (sequence === requestSequence.current) setHistoricalMarkdown(version.markdown);
+      if (sequence === requestSequence.current) {
+        setHistoricalMarkdown(version.markdown);
+        setHistoricalResearch(version.research);
+        setHistoricalResearchStatus(version.researchStatus);
+      }
+      try {
+        const comparison = await fetchReportChanges(report.taskId, versionId, currentVersionId);
+        if (sequence === requestSequence.current) setResearchChanges(comparison.changes);
+      } catch (reason) {
+        if (sequence === requestSequence.current) setChangesError(reason instanceof Error ? reason.message : "版本变化暂时无法读取。");
+      }
     } catch (reason) {
       if (sequence === requestSequence.current) {
         setSelectedVersionId(currentVersionId);
@@ -136,17 +176,32 @@ export function ReportReader({ report, task, onReload }: { report: Report; task?
   }
 
   return <section className="report-reader">
-    <header className="report-reader__top"><div><span className="eyebrow">报告 / {typeLabel(report.type)} / v{selectedVersion?.version ?? report.version}</span><h1>{report.title}</h1><p>{task ? `来自“${task.title}”，关联 ${task.materialIds.length} 份材料，可继续审阅和修订。` : "后端结构化报告版本。"}</p></div><div><ReportConversationLauncher report={report} /><Link href={`/reports/${report.id}/edit`} className="secondary-button">编辑版本</Link><Link href={`/interest-analysis/${report.id}`} className="primary-button"><Network size={16} />关系图谱</Link></div></header>
+    <header className="report-reader__top"><div><span className="eyebrow">报告 / {typeLabel(report.type)} / v{selectedVersion?.version ?? report.version}</span><h1>{report.title}</h1><p>{task ? `来自“${task.title}”，关联 ${task.materialIds.length} 份材料，可继续审阅和修订。` : "后端结构化报告版本。"}</p></div><div><button className="secondary-button" type="button" onClick={() => setEnrichmentOpen(true)}><FilePlus2 size={16} />补充信息与证据</button><ReportConversationLauncher report={report} /><Link href={`/reports/${report.id}/edit`} className="secondary-button">编辑版本</Link><Link href={`/interest-analysis/${report.id}`} className="primary-button"><Network size={16} />关系图谱</Link></div></header>
+    {enrichmentOpen && <ReportEnrichmentLauncher reportId={report.taskId} reportTitle={report.title} onComplete={onReload} open={enrichmentOpen} onOpenChange={setEnrichmentOpen} showTrigger={false} />}
     {!isCurrent && !loadingVersion && historicalMarkdown && <div className="historical-version-banner"><History size={17} /><div><strong>正在查看历史版本 v{selectedVersion?.version}</strong><span>这是只读预览，不会改变当前报告。</span></div><button type="button" onClick={() => void selectVersion(currentVersionId)}>返回当前版本</button></div>}
     {rollbackNotice && <p className="delivery-notice" role="status">{rollbackNotice}</p>}
+    <div className="report-reader__toolbar">
+      <div className="report-reading-modes" role="group" aria-label="报告阅读模式"><span>阅读密度</span>{(["quick", "standard", "research"] as const).map((item) => <button type="button" key={item} aria-label={item === "quick" ? "快速版" : item === "standard" ? "标准版" : "完整研究版"} aria-pressed={readingMode === item} onClick={() => setReadingMode(item)}>{item === "quick" ? "快速版" : item === "standard" ? "标准版" : "完整研究版"}</button>)}</div>
+      <section className="report-download-toolbar" aria-label="报告下载">
+        <span>下载当前正在查看的 v{selectedVersion?.version ?? report.version}。</span>
+        <div className="download-actions"><button type="button" onClick={() => void download("word")} disabled={Boolean(downloading)} aria-label="下载 Word"><Download size={15} />{downloading === "word" ? "Word 生成中" : "Word"}</button><button type="button" onClick={() => void download("pdf")} disabled={Boolean(downloading)} aria-label="下载 PDF"><Download size={15} />{downloading === "pdf" ? "PDF 生成中" : "PDF"}</button><button type="button" onClick={() => downloadMarkdown(report.title, markdown, selectedVersion?.version ?? report.version)} disabled={loadingVersion || (!isCurrent && !historicalMarkdown)} aria-label="下载 Markdown"><FileText size={15} />Markdown</button></div>
+      </section>
+    </div>
+    {downloadError && <p className="delivery-error report-download-error" role="alert">{downloadError}</p>}
+    {!loadingVersion && <ResearchLedger research={renderedResearch} status={renderedResearchStatus} onEnrich={() => setEnrichmentOpen(true)} />}
+    {!loadingVersion && <ResearchTimeline research={renderedResearch} />}
+    {!loadingVersion && <ResearchComparison research={renderedResearch} />}
+    {!loadingVersion && <QuantitativeEvidence research={renderedResearch} />}
+    {!loadingVersion && <ResearchBenchmark taskId={report.taskId} versionId={selectedVersionId} />}
+    {!isCurrent && !loadingVersion && <ResearchChangesPanel changes={researchChanges} fromLabel={`v${selectedVersion?.version ?? "?"}`} toLabel={`v${versions.find((item) => item.id === currentVersionId)?.version ?? report.version}`} />}
+    {changesError && <p className="delivery-error" role="status">版本正文可阅读，但语义变化对比失败：{changesError}</p>}
     <div className="report-reader__layout">
-      <aside className="report-outline"><span className="eyebrow">目录</span>{outline.map((section, index) => <a href={`#${section.id}`} key={section.id}>{String(index + 1).padStart(2, "0")} {section.label}</a>)}</aside>
-      <div className="report-document">{loadingVersion ? <div className="report-version-loading" aria-busy="true">正在读取历史版本...</div> : <MarkdownReport markdown={markdown || report.markdown} hideTitle />}{!loadingVersion && <div className="inline-network"><Network size={20} /><strong>查看结构关系与证据链</strong><Link href={`/interest-analysis/${report.id}`}>进入关系图谱 <ArrowRight size={15} /></Link></div>}</div>
+      <ReportOutline sections={outline} />
+      <div className="report-document">{loadingVersion ? <div className="report-version-loading" aria-busy="true">正在读取历史版本...</div> : <ReportPresentation markdown={renderedMarkdown} fallbackTitle={report.title} mode="reader" readingMode={readingMode} relationHref={`/interest-analysis/${report.id}`} research={renderedResearch} />}</div>
       <aside className="report-delivery-panel">
-        <section><span className="eyebrow">版本记录</span><div className="version-list">{[...versions].sort((left, right) => right.version - left.version).map((version) => <button type="button" className={version.id === selectedVersionId ? "version-item version-item--active" : "version-item"} key={version.id} onClick={() => void selectVersion(version.id)} aria-label={`预览 v${version.version}${version.isCurrent ? "（当前版本）" : ""}`} aria-pressed={version.id === selectedVersionId}><span><strong>v{version.version}</strong>{version.isCurrent && <i>当前</i>}</span><small>{version.summary || (version.kind === "original" ? "初始生成" : version.kind === "revised" ? "人工修订" : "类型未知")}</small><time>{formatDate(version.createdAt)}</time></button>)}</div></section>
+        <section><span className="eyebrow">版本记录</span><div className="version-list">{[...versions].sort((left, right) => right.version - left.version).map((version) => <button type="button" className={version.id === selectedVersionId ? "version-item version-item--active" : "version-item"} key={version.id} onClick={() => void selectVersion(version.id)} aria-label={`预览 v${version.version}${version.isCurrent ? "（当前版本）" : ""}`} aria-pressed={version.id === selectedVersionId}><span><strong>v{version.version}</strong>{version.isCurrent && <i>当前</i>}</span><small>{version.summary || (version.kind === "original" ? "初始生成" : version.kind === "revised" ? "人工修订" : version.kind === "enriched" ? "证据补充" : "类型未知")}</small><time>{formatDate(version.createdAt)}</time></button>)}</div></section>
         {!isCurrent && historicalMarkdown && <section className="rollback-panel"><span className="eyebrow">版本操作</span>{confirmRollback ? <div className="rollback-confirm"><strong>回滚会把 v{selectedVersion?.version} 设为新的当前版本</strong><p>现有版本不会删除，关系图与下载将随当前版本刷新。</p><div><button className="secondary-button" type="button" onClick={() => setConfirmRollback(false)} disabled={rollingBack}>取消</button><button className="danger-button" type="button" onClick={() => void rollback()} disabled={rollingBack} aria-label={`确认回滚到 v${selectedVersion?.version}`}>{rollingBack ? "回滚中" : "确认回滚"}</button></div></div> : <button className="secondary-button rollback-trigger" type="button" onClick={() => setConfirmRollback(true)}><RotateCcw size={15} />回滚到此版本</button>}</section>}
-        <section><span className="eyebrow">交付下载</span><div className="download-actions"><button type="button" onClick={() => void download("word")} disabled={Boolean(downloading)} aria-label="下载 Word"><Download size={15} />{downloading === "word" ? "Word 生成中" : "Word"}</button><button type="button" onClick={() => void download("pdf")} disabled={Boolean(downloading)} aria-label="下载 PDF"><Download size={15} />{downloading === "pdf" ? "PDF 生成中" : "PDF"}</button><button type="button" onClick={() => downloadMarkdown(report.title, markdown, selectedVersion?.version ?? report.version)} disabled={loadingVersion || (!isCurrent && !historicalMarkdown)} aria-label="下载 Markdown"><FileText size={15} />Markdown</button></div><p>下载当前正在查看的 v{selectedVersion?.version ?? report.version}。</p></section>
-        {(versionError || downloadError) && <p className="delivery-error" role="alert">{versionError || downloadError}</p>}
+        {versionError && <p className="delivery-error" role="alert">{versionError}</p>}
         {task && <Link href={`/analysis/${task.id}`} className="text-action">返回分析任务 <ArrowRight size={15} /></Link>}
       </aside>
     </div>

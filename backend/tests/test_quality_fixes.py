@@ -79,10 +79,10 @@ def test_project_detail_aggregates_versions(client):
         )
         db.add_all([t1, t2])
         db.commit()
-        # 任务A：original + revised；任务B：仅 original
-        db.add(ReportVersion(task_id=t1.id, kind="original", content_markdown="o1", editor="系统"))
-        db.add(ReportVersion(task_id=t1.id, kind="revised", content_markdown="r1", editor="系统"))
-        db.add(ReportVersion(task_id=t2.id, kind="original", content_markdown="o2", editor="系统"))
+        # 任务A：original + revised；任务B：仅 original（版本号必须唯一，见唯一索引）
+        db.add(ReportVersion(task_id=t1.id, kind="original", version_no=1, content_markdown="o1", editor="系统"))
+        db.add(ReportVersion(task_id=t1.id, kind="revised", version_no=2, content_markdown="r1", editor="系统"))
+        db.add(ReportVersion(task_id=t2.id, kind="original", version_no=1, content_markdown="o2", editor="系统"))
         db.commit()
 
     r = client.get(f"/api/projects/{pid}/detail")

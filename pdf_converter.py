@@ -103,31 +103,56 @@ def _resolve_soffice() -> str:
     return ""
 
 
+def _collect_pdf(expected: str, auto_pdf: str, pdf_path: str) -> bool:
+    """把 LibreOffice 实际生成的 PDF 收编为 pdf_path，并清理中间产物。
+
+    LibreOffice 的输出文件名固定为「docx 主名 + .pdf」，且可能落在 --outdir
+    （expected）或 docx 同目录（auto_pdf，LibreOffice 忽略 --outdir 时）。
+    无论落在哪里都收编到 pdf_path，避免「转换成功却被误判为失败」。
+    使用 copy2 + unlink 而非 move，避免跨盘移动时触发沙箱 safe-delete 拦截。
+    """
+    for cand in (expected, auto_pdf):
+        if not os.path.exists(cand):
+            continue
+        if os.path.abspath(cand) == os.path.abspath(pdf_path):
+            return True
+        try:
+            shutil.copy2(cand, pdf_path)
+        except OSError:
+            return False
+        # 清理中间产物（expected 在 outdir 内、auto_pdf 在 docx 同目录），防残留
+        for extra in (expected, auto_pdf):
+            if os.path.exists(extra) and os.path.abspath(extra) != os.path.abspath(pdf_path):
+                try:
+                    os.unlink(extra)
+                except OSError:
+                    pass
+        return True
+    return False
+
+
 def _convert_libreoffice(docx_path: str, pdf_path: str) -> bool:
     """使用 LibreOffice 转换（保留超链接）。"""
     soffice = _resolve_soffice()
     if not soffice:
         return False
+    outdir = os.path.dirname(pdf_path) or "."
+    # LibreOffice 输出文件名 = docx 主名 + .pdf，落在 --outdir（或忽略时源目录）
+    expected = os.path.join(outdir, os.path.basename(os.path.splitext(docx_path)[0] + ".pdf"))
+    auto_pdf = os.path.splitext(docx_path)[0] + ".pdf"
     # 使用 writer_pdf_Export 过滤器确保超链接保留
     cmd = [soffice, "--headless", "--convert-to", "pdf:writer_pdf_Export",
-           "--outdir", os.path.dirname(pdf_path), docx_path]
+           "--outdir", outdir, docx_path]
     result = subprocess.run(cmd, capture_output=True, text=True,
                             timeout=120, errors="replace")
-    if result.returncode == 0 and os.path.exists(pdf_path):
+    if result.returncode == 0 and _collect_pdf(expected, auto_pdf, pdf_path):
         return True
     # 回退：不带过滤器重试
     cmd2 = [soffice, "--headless", "--convert-to", "pdf",
-            "--outdir", os.path.dirname(pdf_path), docx_path]
+            "--outdir", outdir, docx_path]
     result2 = subprocess.run(cmd2, capture_output=True, text=True,
                              timeout=120, errors="replace")
-    if result2.returncode == 0 and os.path.exists(pdf_path):
-        return True
-    # LibreOffice 自动命名输出文件（扩展名替换而非指定路径）
-    # 注意：LibreOffice 可能忽略 --outdir，将 PDF 输出到源文件同目录。
-    # 使用 copy2 而非 move，避免跨盘删除时触发沙箱 safe-delete 拦截。
-    auto_pdf = os.path.splitext(docx_path)[0] + ".pdf"
-    if os.path.exists(auto_pdf) and auto_pdf != pdf_path:
-        shutil.copy2(auto_pdf, pdf_path)
+    if result2.returncode == 0 and _collect_pdf(expected, auto_pdf, pdf_path):
         return True
     return False
 
@@ -340,7 +365,7 @@ def _bake_toc(docx_path: str) -> bool:
 
     # 第二步：测量真实页码
     import tempfile
-    tmp_pdf = tempfile.mktemp(suffix=".pdf")
+    tmp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
     measured = None
     try:
         if _convert_libreoffice(docx_path, tmp_pdf):
@@ -413,7 +438,20 @@ def _convert_win32_com(docx_path: str, pdf_path: str) -> bool:
     # RPC_E_CALL_REJECTED = -2147418111
     for attempt in range(3):
         try:
-            word = win32com.client.gencache.EnsureDispatch("Word.Application")
+            # 预热 gencache 类型库缓存（确保方法名早期绑定可解析），
+            # 立即释放探测实例，再用 DispatchEx 启动全新独立实例——
+            # 避免两个 Word 实例并存，留下僵尸进程抢占 COM 锁。
+            probe = None
+            try:
+                probe = win32com.client.gencache.EnsureDispatch("Word.Application")
+            except Exception:
+                probe = None
+            if probe is not None:
+                try:
+                    probe.Quit()
+                except Exception:
+                    pass
+                probe = None
             word = win32com.client.DispatchEx("Word.Application")
             word.Visible = False
             word.DisplayAlerts = 0
@@ -484,35 +522,49 @@ def convert_to_pdf(docx_path: str, pdf_path: str) -> str:
         warnings.warn(f"输入文件不存在: {docx_path}")
         return ""
 
-    # 转换前：把目录按真实页码写回 docx，确保 LibreOffice 导出的 PDF 含完整目录。
-    # 仅在 LibreOffice 可用时生效；失败则优雅回退（PDF 中可能无目录，但不报错）。
-    if _resolve_soffice():
+    # 转换全程在副本上进行：静态目录注入会改写文档内容，直接操作原 docx
+    # 会破坏 docx_renderer 设置的 Word 自动更新目录能力。
+    import tempfile
+    tmp_docx = tempfile.NamedTemporaryFile(suffix=".docx", delete=False).name
+    try:
+        import shutil
+        shutil.copy2(docx_path, tmp_docx)
+        work_docx = tmp_docx
+
+        # 转换前：把目录按真实页码写回副本，确保 LibreOffice 导出的 PDF 含完整目录。
+        # 仅在 LibreOffice 可用时生效；失败则优雅回退（PDF 中可能无目录，但不报错）。
+        if _resolve_soffice():
+            try:
+                _bake_toc(work_docx)
+            except Exception as e:  # noqa: BLE001
+                warnings.warn(f"目录预渲染失败（PDF 可能无目录）: {e}")
+
+        # 按优先级尝试各方案
+        converters = [
+            ("LibreOffice", _convert_libreoffice),
+            ("pandoc", _convert_pandoc),
+        ]
+        # Word COM 仅在显式允许时作为兜底（避免干扰用户本机 Word）
+        if os.environ.get("ALLOW_WORD_COM_PDF") == "1":
+            converters.append(("Windows COM (Word)", _convert_win32_com))
+
+        for name, converter in converters:
+            try:
+                if converter(work_docx, pdf_path):
+                    if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
+                        return pdf_path
+            except Exception as e:
+                warnings.warn(f"PDF 转换器 {name} 失败: {e}")
+                continue
+
+        # 全部失败：给出安装指引
+        _print_install_guide()
+        return ""
+    finally:
         try:
-            _bake_toc(docx_path)
-        except Exception as e:  # noqa: BLE001
-            warnings.warn(f"目录预渲染失败（PDF 可能无目录）: {e}")
-
-    # 按优先级尝试各方案
-    converters = [
-        ("LibreOffice", _convert_libreoffice),
-        ("pandoc", _convert_pandoc),
-    ]
-    # Word COM 仅在显式允许时作为兜底（避免干扰用户本机 Word）
-    if os.environ.get("ALLOW_WORD_COM_PDF") == "1":
-        converters.append(("Windows COM (Word)", _convert_win32_com))
-
-    for name, converter in converters:
-        try:
-            if converter(docx_path, pdf_path):
-                if os.path.exists(pdf_path) and os.path.getsize(pdf_path) > 0:
-                    return pdf_path
-        except Exception as e:
-            warnings.warn(f"PDF 转换器 {name} 失败: {e}")
-            continue
-
-    # 全部失败：给出安装指引
-    _print_install_guide()
-    return ""
+            os.unlink(tmp_docx)
+        except OSError:
+            pass
 
 
 def _print_install_guide() -> None:

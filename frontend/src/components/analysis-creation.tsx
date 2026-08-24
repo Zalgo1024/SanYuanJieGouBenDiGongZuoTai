@@ -1,10 +1,36 @@
 "use client";
 
-import { ArrowRight, FileText, Globe2, Paperclip, Send, Sparkles, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, CircleHelp, FileText, Globe2, Paperclip, Send, Sparkles, X } from "lucide-react";
 import React, { useRef, useState } from "react";
 import { analysisTypes, type AnalysisType, type EngineMode, type MaterialRecord, type NewAnalysisInput, type Project } from "@/lib/domain";
 
-const acceptedFileTypes = ".pdf,.docx,.pptx,.jpg,.jpeg,.png";
+// 与后端 backend/app/routers/materials.py parse_uploaded_file 支持的格式保持一致；
+// 图片/PPT 等二进制格式后端无法解析为文本，前端直接拒绝，避免入库乱码素材。
+const acceptedFileTypes = ".pdf,.docx,.txt,.md";
+const SUPPORTED_EXTENSIONS = ["pdf", "docx", "txt", "md"];
+
+const analysisInputExamples: Record<AnalysisType, { label: string; prompt: string }> = {
+  case: {
+    label: "事件分析示例",
+    prompt: "分析近期发生的某事件：梳理关键时间线、主要参与者及其利益关系，判断冲突为何发生、风险会如何演化，以及有哪些可验证的后续信号。",
+  },
+  policy: {
+    label: "政策分析示例",
+    prompt: "分析某项政策：说明政策要解决的问题、影响的主要群体与利益变化，评估执行约束、潜在副作用和不同情景下的结果。",
+  },
+  opinion: {
+    label: "舆情分析示例",
+    prompt: "分析某起舆情事件：还原事件与传播时间线，区分主要叙事、参与群体和沉默方，判断情绪转折点、扩散机制与后续风险。",
+  },
+  org: {
+    label: "组织分析示例",
+    prompt: "分析某个组织：梳理决策权、资源流向和正式与非正式关系，判断当前矛盾的形成机制、组织风险与可行调整方案。",
+  },
+  combo: {
+    label: "组合分析示例",
+    prompt: "综合分析某个问题：同时从事件、政策、组织和舆情角度识别关键主体、利益关系、制度约束与传播机制，并给出证据边界、情景预测和行动方案。",
+  },
+};
 
 interface AnalysisCreationProps {
   onCreate: (input: NewAnalysisInput) => void | Promise<void>;
@@ -20,7 +46,7 @@ interface AnalysisCreationProps {
 export function AnalysisCreation({
   onCreate,
   onUpload,
-  defaultEngine = "rule",
+  defaultEngine = "auto",
   initialType = "case",
   initialPrompt = "",
   reportTitle,
@@ -32,10 +58,17 @@ export function AnalysisCreation({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputExample = analysisInputExamples[type];
 
   async function upload(files: FileList | null) {
     if (!files?.length) return;
     const selected = Array.from(files);
+    // 双保险：绕过 input accept 拖入的文件也要按扩展名拦截（后端只支持文本类格式）
+    const unsupported = selected.find((file) => {
+      const ext = (file.name.split(".").pop() ?? "").toLowerCase();
+      return !SUPPORTED_EXTENSIONS.includes(ext);
+    });
+    if (unsupported) { setError(`"${unsupported.name}" 格式暂不支持，请上传 txt / md / docx / pdf 文件。`); return; }
     const oversized = selected.find((file) => file.size > 50 * 1024 * 1024);
     if (oversized) { setError(`"${oversized.name}"超过 50MB 限制。`); return; }
     if (!onUpload) { setError("材料上传功能暂不可用，请稍后重试。"); return; }
@@ -62,6 +95,7 @@ export function AnalysisCreation({
         title,
         context: input,
         engine: defaultEngine,
+        inputMode: "freeform",
         materialIds: attachments.map((item) => item.id),
         web: useWeb,
       });
@@ -76,6 +110,35 @@ export function AnalysisCreation({
       <h1 id="analysis-create-title">从你的问题开始</h1>
       <p>{reportTitle ? `这段新对话将关联报告「${reportTitle}」。` : "描述事件、粘贴链接，或直接提出你希望验证的判断。"}</p>
     </header>
+    <details className="analysis-tutorial">
+      <summary>
+        <CircleHelp size={18} />
+        <span><strong>查看输入教程</strong><small>不知道怎么写时，从这里开始</small></span>
+        <ChevronDown className="analysis-tutorial__chevron" size={18} />
+      </summary>
+      <div className="analysis-tutorial__content">
+        <section>
+          <span className="eyebrow">有效输入</span>
+          <h2>最少写清两件事</h2>
+          <ol>
+            <li><strong>分析对象</strong><span>事件、政策、组织、舆情，或一条需要验证的判断。</span></li>
+            <li><strong>希望回答的问题</strong><span>你想看清哪些主体、关系、原因、风险或决策选项。</span></li>
+          </ol>
+          <p>时间范围、你的决策身份、重点主体和已知线索属于增强项；没有也可以先开始。</p>
+        </section>
+        <section className="analysis-tutorial__example">
+          <div>
+            <span className="eyebrow">{inputExample.label}</span>
+            <button type="button" aria-label={`填入${inputExample.label}`} onClick={() => { setMessage(inputExample.prompt); setError(""); }}>填入示例</button>
+          </div>
+          <p>{inputExample.prompt}</p>
+        </section>
+        <div className="analysis-tutorial__materials">
+          <strong>材料怎么用</strong>
+          <span>有原文、公告或访谈时用“添加材料”；需要系统补充公开来源时开启“联网检索”。两者都没有时，系统会按你的问题先建立分析任务。</span>
+        </div>
+      </div>
+    </details>
     <div className="conversation-entry__body">
       <section className="conversation-composer" aria-label="新建分析对话">
         {reportTitle && <div className="conversation-context"><FileText size={15} /><span>关联报告：{reportTitle}</span></div>}
@@ -91,7 +154,15 @@ export function AnalysisCreation({
           <button className="composer-send" type="button" onClick={() => void submit()} disabled={busy}>{busy ? "处理中" : "开始分析"}<Send size={16} /></button>
         </div>
       </section>
-      <aside className="conversation-entry__aside"><strong>系统会自动完成</strong><p>生成分析标题，整理问题边界，并将对话与附件沉淀为可追溯的分析任务。</p><div><Globe2 size={17} /><span>开启联网检索后，系统会自动检索公开来源并写入报告证据基础。</span></div></aside>
+      <aside className="conversation-entry__aside">
+        <strong>提交前检查</strong>
+        <ul>
+          <li><CheckCircle2 size={16} /><span><b>对象</b>：要分析的事件、政策或组织是否明确</span></li>
+          <li><CheckCircle2 size={16} /><span><b>问题</b>：希望系统最终回答什么</span></li>
+          <li><CheckCircle2 size={16} /><span><b>范围</b>：有时间、地区或主体边界时一并写入</span></li>
+        </ul>
+        <div><Globe2 size={17} /><span>没有现成材料时，可开启联网检索补充公开证据。</span></div>
+      </aside>
     </div>
     {error && <p className="form-error conversation-entry__error" role="alert">{error}</p>}
   </section>;

@@ -49,7 +49,7 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
         <p>返回新建分析，或从项目工作台选择后端仍然保留的任务。</p>
         <div>
           <Link className="primary-button" href="/analysis">新建分析</Link>
-          <Link className="secondary-button" href="/projects">查看项目</Link>
+          <Link className="secondary-button" href="/dashboard">返回工作台</Link>
         </div>
       </section>
     );
@@ -61,10 +61,15 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
   const linkedReport = state.reports.find((report) => report.taskId === task.id);
   const linkedMaterials = state.materials.filter((material) => task.materialIds.includes(material.id));
   const running = task.status === "queued" || task.status === "generating";
+  const errorPhaseLabel = task.errorPhase === "quality_gate"
+    ? "报告质量校验"
+    : task.errorPhase === "input_validation"
+      ? "输入校验"
+      : phaseLabels.find((phase) => phase.id === task.errorPhase)?.label;
   const statusText = task.status === "done"
     ? linkedReport ? "任务已完成，后端当前报告版本已同步。" : "任务已完成，正在同步后端当前报告版本。"
     : task.status === "error"
-      ? "后端任务执行失败。请检查输入材料或后端日志后重新发起分析。"
+      ? `后端在${errorPhaseLabel ?? currentPhase?.label ?? "当前步骤"}失败。${task.error || "请检查输入材料后重新发起分析。"}`
       : "后端正在执行分析。此处只显示任务实际返回的阶段与进度。";
 
   return (
@@ -107,6 +112,20 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
             <span className="eyebrow">后端任务状态</span>
             <h2>{currentPhase?.label ?? "等待后端响应"}</h2>
             <p>{statusText}</p>
+            {task.status === "error" && task.error && <p className="task-error-detail" role="alert">错误详情：{task.error}</p>}
+            {task.quality && (
+              <section className="quality-result" aria-label="报告质量校验结果">
+                <div><strong>报告质量校验</strong><span>{task.quality.issues.filter((issue) => issue.severity === "error").length} 项错误 · {task.quality.issues.filter((issue) => issue.severity === "warning").length} 项警告</span></div>
+                {task.quality.issues.length > 0 && (
+                  <ul>{task.quality.issues.map((issue) => (
+                    <li key={`${issue.code}-${issue.section ?? "report"}`}>
+                      <strong>{issue.section ?? "全文"}</strong>
+                      <span>{issue.message}</span>
+                    </li>
+                  ))}</ul>
+                )}
+              </section>
+            )}
             <div>
               <span>任务状态：{task.status}</span>
               <span>分析素材：{task.materialIds.length} 项</span>
@@ -144,7 +163,7 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
           </div>
         )
       )}
-      {view === "network" && <AnalysisNetwork taskId={task.id} markdown={linkedReport?.markdown} materials={linkedMaterials} />}
+      {view === "network" && <AnalysisNetwork taskId={task.id} markdown={linkedReport?.markdown} materials={linkedMaterials} research={linkedReport?.research} researchStatus={linkedReport?.researchStatus} />}
     </section>
   );
 }

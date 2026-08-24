@@ -136,6 +136,16 @@ def test_analyze_rule_pipeline(client, sample_event):
     assert data["contract"]["valid"] is True
     assert data["markdown"] and len(data["markdown"]) > 500
     assert data.get("word"), "应产出 word 路径"
+    assert data["quality"]["valid"] is True
+    assert data["quality"]["score"] > 0
+
+    from app.db import SessionLocal
+    from app.models import Task
+
+    with SessionLocal() as db:
+        task = db.get(Task, tid)
+        assert task.quality_score == data["quality"]["score"]
+        assert task.quality_result == data["quality"]
 
     # 下载 docx
     r = client.get(f"/api/download/{tid}", params={"kind": "word"})

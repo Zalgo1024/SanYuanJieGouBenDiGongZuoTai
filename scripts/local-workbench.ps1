@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("start", "stop", "status")]
     [string]$Action = "status",
     [switch]$NoBrowser,
@@ -33,21 +33,45 @@ function Write-Step {
 
 function Get-ListenerProcessIds {
     param([int]$Port)
-    return @(
-        Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty OwningProcess -Unique
-    )
+    # 用 netstat 解析监听端口 → PID（Get-NetTCPConnection 在本机实测单次 2s+，太慢；
+    # netstat 实测 <0.1s，同一信息）
+    $ids = @()
+    try {
+        $lines = netstat -ano -p tcp 2>$null
+    }
+    catch {
+        return @()
+    }
+    foreach ($line in $lines) {
+        # 行格式: TCP    127.0.0.1:3000    0.0.0.0:0    LISTENING    45952
+        # (IPv6: [::]:3000 同样含 ":3000")
+        if ($line -match "TCP\s+.*:$Port\s+.*LISTENING\s+(\d+)\s*$") {
+            $ids += [int]$Matches[1]
+        }
+    }
+    return @($ids | Select-Object -Unique)
 }
+
+# 进程 CommandLine 批量缓存：Get-CimInstance Win32_Process 逐条查询慢（单条 ~0.35s），
+# 首次调用时批量拉一次全量映射（~0.36s），后续命中缓存，显著加快多次状态探测。
+$script:CommandLineCache = $null
 
 function Get-LiveCommandLine {
     param([int]$ProcessId)
-    try {
-        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction Stop
-        return [string]$process.CommandLine
+    if ($null -eq $script:CommandLineCache) {
+        $script:CommandLineCache = @{}
+        foreach ($proc in (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+            try {
+                $script:CommandLineCache[[int]$proc.ProcessId] = [string]$proc.CommandLine
+            }
+            catch {
+                # 忽略个别进程读取失败
+            }
+        }
     }
-    catch {
-        return ""
-    }
+    $cached = $script:CommandLineCache[[int]$ProcessId]
+    if ($null -eq $cached) { return "" }
+    return [string]$cached
 }
 
 function Test-HttpEndpoint {
@@ -328,17 +352,42 @@ function Invoke-Start {
         if ($backend.Status -eq "stopped") { $startedBackend = Start-BackendService -PythonPath $python } else { Write-Step "Reusing healthy backend PID $($backend.ProcessId)." }
         if ($frontendAction -eq "start") { $startedFrontend = Start-FrontendService -NodePath $node } else { Write-Step "Reusing healthy frontend PID $($frontend.ProcessId)." }
 
-        $backendHealthy = Wait-ForEndpoint -Name "Backend" -Url $backendUrl -TimeoutSeconds $StartupTimeoutSeconds
-        $frontendHealthy = Wait-ForEndpoint -Name "Frontend" -Url $frontendUrl -TimeoutSeconds $StartupTimeoutSeconds
+        $backendHealthy = $false
+        $frontendHealthy = $false
+        $browserOpened = $false
+        # 前后端并行健康等待（短超时轮询，互不阻塞）；
+        # 前端一就绪就立即打开浏览器，不必等后端——用户看到页面的时间 ≈ 前端就绪时间。
+        $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
+        while ((Get-Date) -lt $deadline) {
+            if (-not $backendHealthy) { $backendHealthy = Test-HttpEndpoint -Url $backendUrl -TimeoutSeconds 1 }
+            if (-not $frontendHealthy) { $frontendHealthy = Test-HttpEndpoint -Url $frontendUrl -TimeoutSeconds 1 }
+            if ($frontendHealthy -and -not $browserOpened -and -not $NoBrowser) {
+                Start-Process $frontendUrl
+                $browserOpened = $true
+                Write-Step "Frontend is ready; opening browser: $frontendUrl"
+            }
+            if ($backendHealthy -and $frontendHealthy) { break }
+            Start-Sleep -Milliseconds 250
+        }
         if (-not ($backendHealthy -and $frontendHealthy)) {
             throw "Workbench startup failed. Inspect logs in $runtimeDir"
         }
 
-        $backend = Get-ServiceState -Name "Backend" -Port $backendPort -HealthUrl $backendUrl
-        $frontend = Get-ServiceState -Name "Frontend" -Port $frontendPort -HealthUrl $frontendUrl
-        Save-RuntimeState -Backend $backend -Frontend $frontend
-        Show-ServiceState -Service $backend
-        Show-ServiceState -Service $frontend
+        # 用循环内的健康结果构造最终状态（PID 以实际启动为准），
+        # 不再重复探测端口/进程，省去两轮 Get-ServiceState 的耗时。
+        $backendPid = if ($startedBackend -gt 0) { $startedBackend } else { $backend.ProcessId }
+        $frontendPid = if ($startedFrontend -gt 0) { $startedFrontend } else { $frontend.ProcessId }
+        $backendFinal = [PSCustomObject]@{
+            Name = "Backend"; Port = $backendPort; Status = "running"
+            ProcessId = $backendPid; CommandLine = ""; Healthy = $backendHealthy
+        }
+        $frontendFinal = [PSCustomObject]@{
+            Name = "Frontend"; Port = $frontendPort; Status = "running"
+            ProcessId = $frontendPid; CommandLine = ""; Healthy = $frontendHealthy
+        }
+        Save-RuntimeState -Backend $backendFinal -Frontend $frontendFinal
+        Show-ServiceState -Service $backendFinal
+        Show-ServiceState -Service $frontendFinal
         if ($stagedUpgrade) { Remove-SafeBuildDirectory -Path $previousBuildDir }
     }
     catch {
@@ -353,7 +402,6 @@ function Invoke-Start {
         }
         throw
     }
-    if (-not $NoBrowser) { Start-Process "http://127.0.0.1:3000" }
     Write-Step "Workbench is ready: $frontendUrl"
     return 0
 }

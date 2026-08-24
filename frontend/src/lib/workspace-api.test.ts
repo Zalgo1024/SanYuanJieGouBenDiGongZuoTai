@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AnalysisTask } from "./domain";
-import { fetchCurrentReport, fetchWorkspaceSnapshot } from "./workspace-api";
+import { createAnalysisTask, createReportEnrichment, fetchCurrentReport, fetchProjectMonitor, fetchWorkspaceSnapshot, runProjectMonitor, updateProjectMonitor } from "./workspace-api";
 
 const task: AnalysisTask = {
   id: "task-1",
@@ -37,6 +37,16 @@ describe("fetchCurrentReport", () => {
           version_no: 2,
           created_at: "2026-08-01T11:00:00",
           content_markdown: "# 后端当前版本\n\n## 结论\n\n真实内容",
+          research_status: "verified",
+          research: {
+            schema_version: "1.0",
+            status: "verified",
+            sources: [],
+            claims: [{ id: "c1", text: "真实判断", claim_type: "inference", confidence: "medium" }],
+            relations: [],
+            gaps: [],
+            metrics: {},
+          },
         };
       }
       throw new Error(`unexpected path: ${path}`);
@@ -56,6 +66,8 @@ describe("fetchCurrentReport", () => {
         { id: "version-2", version: 2, isCurrent: true },
       ],
       updatedAt: "2026-08-01T11:00:00",
+      researchStatus: "verified",
+      research: { claims: [{ id: "c1", text: "真实判断" }] },
     });
     expect(request).toHaveBeenCalledWith("/api/reports/task-1/versions/version-2");
   });
@@ -107,5 +119,83 @@ describe("fetchWorkspaceSnapshot", () => {
       tasks: [expect.objectContaining({ id: "task-1", status: "done" })],
       reports: [],
     });
+  });
+});
+
+describe("createAnalysisTask", () => {
+  it("sends the explicit freeform and requested-engine contract", async () => {
+    const request = vi.fn(async () => ({ task_id: "task-new" }));
+
+    const result = await createAnalysisTask({
+      type: "case",
+      title: "事件分析",
+      context: "分析这个事件",
+      engine: "auto",
+      inputMode: "freeform",
+      materialIds: [],
+      web: false,
+    }, request, "browser-profile-111111111111");
+
+    expect(result).toEqual({ task_id: "task-new" });
+    expect(request).toHaveBeenCalledWith("/api/analyze", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        title: "事件分析",
+        input_text: "分析这个事件",
+        analysis_type: "case",
+        input_mode: "freeform",
+        requested_engine: "auto",
+        project_id: null,
+        material_ids: [],
+        web: false,
+        llm_config: { profile_id: "browser-profile-111111111111" },
+      }),
+    }));
+  });
+});
+
+describe("createReportEnrichment", () => {
+  it("binds selected materials and web search to the current report", async () => {
+    const request = vi.fn(async () => ({
+      job_task_id: "enrichment-1",
+      target_task_id: "task-1",
+      base_version_id: "version-2",
+      status: "queued",
+    }));
+
+    const result = await createReportEnrichment("task-1", {
+      instruction: "补齐官方公告与时间线",
+      materialIds: ["material-1"],
+      web: true,
+    }, request, "browser-profile-111111111111");
+
+    expect(result).toMatchObject({ jobTaskId: "enrichment-1", baseVersionId: "version-2" });
+    expect(request).toHaveBeenCalledWith("/api/reports/task-1/enrichments", {
+      method: "POST",
+      body: JSON.stringify({
+        instruction: "补齐官方公告与时间线",
+        material_ids: ["material-1"],
+        web: true,
+        source_urls: [],
+        llm_config: { profile_id: "browser-profile-111111111111" },
+      }),
+    });
+  });
+});
+
+describe("project monitoring API", () => {
+  it("loads, updates and manually runs local monitoring", async () => {
+    const request = vi.fn(async (path: string, options?: RequestInit) => {
+      if (path === "/api/projects/project-1/monitor" && !options) return { project_id: "project-1", configured: true, enabled: true, interval_hours: 24, seed_task_id: "task-1", next_run_at: "2026-08-17T10:00:00", latest_change: { has_changes: true, summary: ["发现 1 个新主体"] } };
+      if (path === "/api/projects/project-1/monitor" && options?.method === "PUT") return { project_id: "project-1", configured: true, enabled: false, interval_hours: 72, seed_task_id: "task-1" };
+      if (path === "/api/projects/project-1/monitor/run") return { task_id: "task-2" };
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    await expect(fetchProjectMonitor("project-1", request)).resolves.toMatchObject({ projectId: "project-1", enabled: true, latestChange: { summary: ["发现 1 个新主体"] } });
+    await expect(updateProjectMonitor("project-1", { enabled: false, intervalHours: 72, seedTaskId: "task-1" }, request)).resolves.toMatchObject({ enabled: false, intervalHours: 72 });
+    await expect(runProjectMonitor("project-1", request)).resolves.toEqual({ taskId: "task-2" });
+    expect(request).toHaveBeenCalledWith("/api/projects/project-1/monitor", expect.objectContaining({ method: "PUT" }));
+    expect(request).toHaveBeenCalledWith("/api/projects/project-1/monitor/run", { method: "POST" });
   });
 });

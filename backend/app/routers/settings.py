@@ -4,11 +4,16 @@
 """
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.config_store import load_app_config, save_app_config
-from app.llm_settings_store import public_settings, save_settings
+from app.llm_settings_store import (
+    delete_profile_settings,
+    public_profile_settings,
+    public_settings,
+    save_profile_settings,
+)
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -36,12 +41,38 @@ def get_llm_settings():
 
 @router.post("/api/settings/llm")
 def post_llm_settings(req: LlmSettingsIn):
-    """保存 LLM 设置（含密钥）到后端 data/llm_settings.json（已 gitignore）。
+    """旧的全局写入口已停用，避免公共用户覆盖服务器管理员配置。"""
+    raise HTTPException(
+        status_code=410,
+        detail="全局 AI 配置入口已停用，请使用当前浏览器的个人 AI 连接。",
+    )
 
-    前端只在此处提交一次密钥；后续 /api/analyze 不再携带 key。
-    返回脱敏概览。
-    """
-    return save_settings(req.model_dump(exclude_none=True))
+
+@router.get("/api/settings/llm/profiles/{profile_id}")
+def get_llm_profile(profile_id: str):
+    """读取当前浏览器连接的脱敏状态，不读取服务器管理员密钥。"""
+    try:
+        return public_profile_settings(profile_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/api/settings/llm/profiles/{profile_id}")
+def post_llm_profile(profile_id: str, req: LlmSettingsIn):
+    """保存浏览器级 BYOK 配置；空 api_key 不会覆盖已保存密钥。"""
+    try:
+        return save_profile_settings(profile_id, req.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/api/settings/llm/profiles/{profile_id}")
+def delete_llm_profile(profile_id: str):
+    """彻底移除当前浏览器连接及其 API Key。"""
+    try:
+        return delete_profile_settings(profile_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 # ============================ 搜索设置（可选插件 / 可灰度） ============================

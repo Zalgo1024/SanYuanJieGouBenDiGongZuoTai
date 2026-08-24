@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { MaterialRecord } from "./domain";
-import { collectReportEvidence, parseReportGraphs } from "./report-graph";
+import type { MaterialRecord, ResearchBundle } from "./domain";
+import { collectReportEvidence, enrichDiagramWithResearch, findResearchNode, findResearchRelation, parseReportGraphs } from "./report-graph";
 
 const materials: MaterialRecord[] = [
   {
@@ -34,6 +34,40 @@ describe("parseReportGraphs", () => {
     expect(result.diagrams.map((item) => item.viz)).toEqual(["network", "org", "network"]);
     expect(result.diagrams[0].edges[0]).toMatchObject({ id: "diagram-1-edge-1", source: "a", target: "b", type: "economic" });
     expect(result.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "unsupported_viz", diagramIndex: 2 })]));
+  });
+
+  it("preserves evidence binding metadata and matches a research relation", () => {
+    const markdown = [
+      "```DIAGRAM",
+      JSON.stringify({ nodes: [{ id: "a" }, { id: "b" }], edges: [{ source: "a", target: "b", label: "资金", type: "economic", relation_id: "r1", claim_id: "c1", evidence_ids: ["s1"] }] }),
+      "```",
+    ].join("\n");
+    const research = {
+      relations: [{ id: "r1", sourceNode: "a", targetNode: "b", label: "资金", relationType: "economic", direction: "directed", polarity: "neutral", confidence: "high", evidenceIds: ["s1"], claimId: "c1", status: "confirmed" }],
+    } as ResearchBundle;
+
+    const edge = parseReportGraphs(markdown).diagrams[0].edges[0];
+
+    expect(edge).toMatchObject({ researchRelationId: "r1", claimId: "c1", evidenceIds: ["s1"] });
+    expect(findResearchRelation(edge, research)?.id).toBe("r1");
+  });
+
+  it("enriches diagram nodes and edges from the authoritative research snapshot", () => {
+    const diagram = parseReportGraphs([
+      "```DIAGRAM",
+      JSON.stringify({ nodes: [{ id: "a", label: "主体A" }, { id: "b", label: "主体B" }], edges: [{ source: "a", target: "b", label: "控制", relation_id: "r1" }] }),
+      "```",
+    ].join("\n")).diagrams[0];
+    const research = {
+      nodes: [{ id: "a", label: "主体A", role: "决策者", interests: ["控制权"], stance: "收缩", weight: 0.9, confidence: "high", evidenceIds: ["s1"], stanceHistory: [] }],
+      relations: [{ id: "r1", sourceNode: "a", targetNode: "b", label: "控制", relationType: "power", direction: "directed", polarity: "negative", confidence: "high", evidenceIds: ["s1"], status: "confirmed", strength: 5, interestTypes: ["power"], evidenceCount: 1 }],
+    } as ResearchBundle;
+
+    const enriched = enrichDiagramWithResearch(diagram, research);
+
+    expect(enriched.nodes[0]).toMatchObject({ weight: 0.9, role: "决策者", stance: "收缩", confidence: "high" });
+    expect(enriched.edges[0]).toMatchObject({ strength: 5, direction: "directed", polarity: "negative", relationStatus: "confirmed" });
+    expect(findResearchNode(enriched.nodes[0], research)?.id).toBe("a");
   });
 
   it("skips malformed diagrams and dangling edges without manufacturing nodes", () => {

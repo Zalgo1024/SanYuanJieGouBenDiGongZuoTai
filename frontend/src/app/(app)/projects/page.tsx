@@ -1,2 +1,3 @@
-import { ProjectsScreen } from "@/components/app-screens";
-export default function ProjectsPage() { return <ProjectsScreen />; }
+import { redirect } from "next/navigation";
+
+export default function ProjectsPage() { redirect("/dashboard"); }

@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import queue as taskq
 from app.db import init_db, seed_projects
-from app.routers import analyze, cases, materials, projects, reports, search, settings, system, tasks
+from app.routers import analyze, benchmarks, cases, materials, monitoring, projects, reports, search, settings, system, tasks
 
 logger = logging.getLogger("app")
 
@@ -79,6 +79,8 @@ app.include_router(materials.router)
 app.include_router(tasks.router)
 app.include_router(search.router)
 app.include_router(cases.router)
+app.include_router(monitoring.router)
+app.include_router(benchmarks.router)
 
 
 @app.on_event("startup")
@@ -88,3 +90,6 @@ async def _startup() -> None:
     seed_projects()
     taskq.recover_interrupted()
     taskq.start_workers()
+    from app.monitoring import start_monitor_scheduler
+
+    start_monitor_scheduler()

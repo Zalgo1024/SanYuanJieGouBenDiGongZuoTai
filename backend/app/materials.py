@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 
 @dataclass
@@ -26,6 +27,56 @@ class MaterialBundle:
 
     items: list[dict] = field(default_factory=list)  # [{title,url,text,snippet,kept}]
     sources: list[SourceItem] = field(default_factory=list)  # [{title,url}]
+
+
+def bundle_from_material_rows(rows: list) -> MaterialBundle:
+    """Convert persisted user materials into the same evidence bundle as web sources."""
+    items: list[dict] = []
+    sources: list[SourceItem] = []
+    for row in rows or []:
+        text = str(getattr(row, "content_text", "") or "").strip()
+        if not text:
+            continue
+        source = str(getattr(row, "source", "") or "").strip()
+        url = source if re.match(r"^https?://", source, re.IGNORECASE) else ""
+        title = str(getattr(row, "title", "") or "本地材料")
+        items.append(
+            {
+                "material_id": str(getattr(row, "id", "") or ""),
+                "title": title,
+                "url": url,
+                "text": text,
+                "snippet": source if source and not url else "",
+                "kept": True,
+                "source_type": str(getattr(row, "source_type", "") or "user_material"),
+            }
+        )
+        if url:
+            sources.append(SourceItem(title=title, url=url))
+    return MaterialBundle(items=items, sources=sources)
+
+
+def merge_bundles(*bundles: MaterialBundle | dict | None) -> MaterialBundle:
+    """Merge local and web evidence while deduplicating URLs and material IDs."""
+    items: list[dict] = []
+    sources: list[SourceItem] = []
+    seen_items: set[str] = set()
+    seen_sources: set[str] = set()
+    for raw in bundles:
+        bundle = _coerce_bundle(raw)
+        for item in bundle.items:
+            identity = str(item.get("material_id") or item.get("url") or "")
+            if identity and identity in seen_items:
+                continue
+            if identity:
+                seen_items.add(identity)
+            items.append(item)
+        for source in bundle.sources:
+            if not source.url or source.url in seen_sources:
+                continue
+            seen_sources.add(source.url)
+            sources.append(source)
+    return MaterialBundle(items=items, sources=sources)
 
 
 def _coerce_bundle(bundle: MaterialBundle | dict | None) -> MaterialBundle:
@@ -102,25 +153,62 @@ def build_materials(
     return MaterialBundle(items=items, sources=sources)
 
 
-def format_materials_context(bundle: MaterialBundle | dict | None, max_chars: int = 24000) -> str:
-    """拼成注入 generator 的素材块：每篇「[标题](url) + 正文截断」。
+def extract_fact_candidates(text: str, limit: int = 5) -> list[str]:
+    """从清洗后的来源正文抽取少量句级事实候选。
 
-    只注入 kept=True 且抓取成功的条目；总长超 max_chars 时按出现顺序截断。
+    这不是事实裁决器：候选仍需模型在写作前核对和去重。它的职责是切断把整篇
+    网页原文直接塞进报告的路径，让每一来源在研究上下文中最多占五个句子。
     """
+    normalized = re.sub(r"\s+", " ", text or "").strip()
+    if not normalized:
+        return []
+    parts = re.split(r"(?<=[。！？!?；;])\s*", normalized)
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for part in parts:
+        candidate = part.strip()
+        if len(candidate) < 6 or candidate in seen:
+            continue
+        seen.add(candidate)
+        candidates.append(candidate)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def format_materials_context(bundle: MaterialBundle | dict | None, max_chars: int = 12000) -> str:
+    """拼成供模型内部研究的事实候选池，而非可直接复读的网页原文。"""
     b = _coerce_bundle(bundle)
     parts: list[str] = []
     total = 0
     for it in b.items:
         if not it.get("kept") or not it.get("text"):
             continue
-        block = f"[素材] {it.get('title', '')}\n来源：{it.get('url', '')}\n{it.get('text', '')}"
+        candidates = extract_fact_candidates(it.get("text", ""))
+        if not candidates:
+            continue
+        facts = "\n".join(f"- {candidate}" for candidate in candidates)
+        block = (
+            f"来源：{it.get('title', '')}\n"
+            f"链接：{it.get('url', '')}\n"
+            f"事实候选（仅供内部核对，不得整段复述）：\n{facts}"
+        )
         parts.append(block)
         total += len(block)
         if total >= max_chars:
             break
     if not parts:
         return ""
-    return "【联网抓取素材】\n" + "\n\n".join(parts)
+    return "【内部研究材料】\n" + "\n\n".join(parts)
+
+
+def _md_escape_url(url: str) -> str:
+    """把 URL 放入 Markdown 链接括号前的安全化：括号必须百分号编码，
+    否则 `[标题](url)` 会被 `)` 提前截断（铁律：每条来源必须可点击）。
+    只处理括号字符，保留已有 %XX 编码与其余字符原样。"""
+    if not url:
+        return url
+    return url.replace("(", "%28").replace(")", "%29")
 
 
 def format_source_appendix(sources: list[SourceItem] | None) -> str:
@@ -130,5 +218,5 @@ def format_source_appendix(sources: list[SourceItem] | None) -> str:
         return ""
     lines = ["**数据来源**："]
     for i, s in enumerate(srcs, 1):
-        lines.append(f"{i}. [{s.title}]({s.url})")
+        lines.append(f"{i}. [{s.title}]({_md_escape_url(s.url)})")
     return "\n".join(lines)

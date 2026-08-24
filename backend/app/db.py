@@ -94,6 +94,13 @@ def init_db() -> None:
         # 阶段三：material_ids（分析使用的材料列表，存 tasks）
         if "material_ids" not in cols:
             alters.append("ALTER TABLE tasks ADD COLUMN material_ids JSON")
+        for col, ddl in (
+            ("operation", "VARCHAR(24) DEFAULT 'analysis'"),
+            ("target_task_id", "VARCHAR(32) REFERENCES tasks(id)"),
+            ("base_version_id", "VARCHAR(32)"),
+        ):
+            if col not in cols:
+                alters.append(f"ALTER TABLE tasks ADD COLUMN {col} {ddl}")
         # 阶段四：LLM 增强元信息（模型/温度/提示词版本/原始响应）
         for col, ddl in (
             ("llm_model", "VARCHAR(120)"),
@@ -108,6 +115,14 @@ def init_db() -> None:
             alters.append("ALTER TABLE tasks ADD COLUMN phase VARCHAR(32)")
         if "progress_pct" not in cols:
             alters.append("ALTER TABLE tasks ADD COLUMN progress_pct INTEGER DEFAULT 0")
+        if "input_mode" not in cols:
+            alters.append("ALTER TABLE tasks ADD COLUMN input_mode VARCHAR(16)")
+        if "requested_engine" not in cols:
+            alters.append("ALTER TABLE tasks ADD COLUMN requested_engine VARCHAR(16)")
+        if "quality_score" not in cols:
+            alters.append("ALTER TABLE tasks ADD COLUMN quality_score INTEGER")
+        if "quality_result" not in cols:
+            alters.append("ALTER TABLE tasks ADD COLUMN quality_result JSON")
         # 阶段五：全网搜索（可选增强）
         if "search_enabled" not in cols:
             alters.append("ALTER TABLE tasks ADD COLUMN search_enabled BOOLEAN")
@@ -118,6 +133,11 @@ def init_db() -> None:
             alters.append("ALTER TABLE tasks ADD COLUMN web BOOLEAN DEFAULT 0")
         if "source_urls" not in cols:
             alters.append("ALTER TABLE tasks ADD COLUMN source_urls JSON")
+        if "monitor_id" not in cols:
+            alters.append(
+                "ALTER TABLE tasks ADD COLUMN monitor_id VARCHAR(32) "
+                "REFERENCES research_monitors(id)"
+            )
         # T13：report_versions 版本管理扩展（version_no/edited_by/summary/is_current）
         vcols = {c["name"] for c in inspect(engine).get_columns("report_versions")}
         for col, ddl in (
@@ -125,6 +145,8 @@ def init_db() -> None:
             ("edited_by", "VARCHAR(16) DEFAULT 'ai'"),
             ("summary", "VARCHAR(500)"),
             ("is_current", "INTEGER DEFAULT 0"),
+            ("research_snapshot", "JSON"),
+            ("research_status", "VARCHAR(16) DEFAULT 'unavailable'"),
         ):
             if col not in vcols:
                 alters.append(f"ALTER TABLE report_versions ADD COLUMN {col} {ddl}")
@@ -141,6 +163,38 @@ def init_db() -> None:
             conn.execute(text(sql))
         if alters:
             conn.commit()
+
+        # 2.6 迁移：report_versions (task_id, version_no) 唯一索引，
+        # 防止并发保存产生重复版本号（对已有库同样生效）。
+        # 先清理历史重复行（同任务同版本号仅保留最新一条），再建唯一索引。
+        conn.execute(text(
+            "DELETE FROM report_versions WHERE id IN ("
+            "  SELECT rv.id FROM report_versions rv"
+            "  JOIN report_versions rv2 ON rv.task_id = rv2.task_id"
+            "   AND rv.version_no = rv2.version_no"
+            "   AND (rv.created_at < rv2.created_at"
+            "        OR (rv.created_at = rv2.created_at AND rv.id < rv2.id))"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_versions_task_version "
+            "ON report_versions (task_id, version_no)"
+        ))
+        # 历史库若曾出现多个 current，保留版本号最高的一条。
+        conn.execute(text(
+            "UPDATE report_versions SET is_current = 0 "
+            "WHERE is_current = 1 AND EXISTS ("
+            "  SELECT 1 FROM report_versions newer"
+            "  WHERE newer.task_id = report_versions.task_id"
+            "    AND newer.is_current = 1"
+            "    AND newer.version_no > report_versions.version_no"
+            ")"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_report_versions_one_current "
+            "ON report_versions (task_id) WHERE is_current = 1"
+        ))
+        conn.commit()
 
 
 def seed_projects() -> None:

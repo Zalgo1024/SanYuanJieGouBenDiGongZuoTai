@@ -3,8 +3,8 @@
 import { AlertTriangle, ExternalLink, FileText, LocateFixed, Network as NetworkIcon, Search, ZoomIn, ZoomOut } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest } from "@/lib/api";
-import type { MaterialRecord } from "@/lib/domain";
-import { collectReportEvidence, parseReportGraphs, type DiagramDocument } from "@/lib/report-graph";
+import type { MaterialRecord, ResearchBundle, ResearchSnapshotStatus } from "@/lib/domain";
+import { collectReportEvidence, enrichDiagramWithResearch, findResearchNode, findResearchRelation, parseReportGraphs, type DiagramDocument } from "@/lib/report-graph";
 import { GraphCanvas, type GraphCanvasHandle, type GraphSelection } from "@/components/graph-canvas";
 
 type LoadState = "loading" | "ready" | "missing" | "error";
@@ -35,7 +35,11 @@ const edgeTypeLabels: Record<string, string> = {
   unknown: "未分类关系",
 };
 
-export function AnalysisNetwork({ taskId, markdown: currentMarkdown, materials = [] }: { taskId: string; markdown?: string; materials?: MaterialRecord[] }) {
+const interestTypeLabels: Record<string, string> = { economic: "经济利益", power: "权力利益", cultural: "文化利益", legal: "法律利益", security: "安全利益", identity: "身份利益" };
+const directionLabels: Record<string, string> = { directed: "单向", undirected: "无方向", mutual: "双向", unknown: "方向未知" };
+const polarityLabels: Record<string, string> = { positive: "正向", negative: "负向", mixed: "正负混合", neutral: "中性", unknown: "作用未知" };
+
+export function AnalysisNetwork({ taskId, markdown: currentMarkdown, materials = [], research, researchStatus = "unavailable" }: { taskId: string; markdown?: string; materials?: MaterialRecord[]; research?: ResearchBundle; researchStatus?: ResearchSnapshotStatus }) {
   const [markdown, setMarkdown] = useState<string | null>(currentMarkdown ?? null);
   const [state, setState] = useState<LoadState>(currentMarkdown ? "ready" : "loading");
   const [activeDiagramId, setActiveDiagramId] = useState("");
@@ -86,7 +90,8 @@ export function AnalysisNetwork({ taskId, markdown: currentMarkdown, materials =
     setCanvasError(null);
   }, [markdown]);
 
-  const activeDiagram = parsed.diagrams.find((diagram) => diagram.id === activeDiagramId) ?? parsed.diagrams[0];
+  const rawActiveDiagram = parsed.diagrams.find((diagram) => diagram.id === activeDiagramId) ?? parsed.diagrams[0];
+  const activeDiagram = useMemo(() => rawActiveDiagram ? enrichDiagramWithResearch(rawActiveDiagram, research) : undefined, [rawActiveDiagram, research]);
   const selectedNode = selection?.kind === "node" ? activeDiagram?.nodes.find((node) => node.id === selection.id) : null;
   const selectedEdge = selection?.kind === "edge" ? activeDiagram?.edges.find((edge) => edge.id === selection.id) : null;
   const citations = evidence.filter((item) => item.kind === "citation");
@@ -119,6 +124,15 @@ export function AnalysisNetwork({ taskId, markdown: currentMarkdown, materials =
   const outbound = selectedNode ? activeDiagram.edges.filter((edge) => edge.source === selectedNode.id) : [];
   const edgeSource = selectedEdge ? activeDiagram.nodes.find((node) => node.id === selectedEdge.source) : null;
   const edgeTarget = selectedEdge ? activeDiagram.nodes.find((node) => node.id === selectedEdge.target) : null;
+  const selectedRelation = selectedEdge ? findResearchRelation(selectedEdge, research) : undefined;
+  const selectedProfile = selectedNode ? findResearchNode(selectedNode, research) : undefined;
+  const selectedNodeSources = (selectedProfile?.evidenceIds ?? []).map((id) => research?.sources.find((source) => source.id === id)).filter((source): source is NonNullable<typeof source> => Boolean(source));
+  const relationClaim = selectedRelation?.claimId ? research?.claims.find((claim) => claim.id === selectedRelation.claimId) : undefined;
+  const relationSources = (selectedRelation?.evidenceIds ?? selectedEdge?.evidenceIds ?? [])
+    .map((id) => research?.sources.find((source) => source.id === id))
+    .filter((source): source is NonNullable<typeof source> => Boolean(source));
+  const relationStatusLabel = selectedRelation?.status === "confirmed" ? "已确认" : selectedRelation?.status === "conflicted" ? "存在冲突" : "推测关系";
+  const relationConfidenceLabel = selectedRelation?.confidence === "high" ? "高置信度" : selectedRelation?.confidence === "medium" ? "中置信度" : selectedRelation?.confidence === "low" ? "低置信度" : "置信度未知";
 
   return (
     <section className="analysis-network">
@@ -160,10 +174,12 @@ export function AnalysisNetwork({ taskId, markdown: currentMarkdown, materials =
           {selectedNode ? <>
             <span className="eyebrow">选中主体</span><h3>{selectedNode.label}</h3><p>{nodeTypeLabels[selectedNode.type] ?? selectedNode.type}</p>
             <div className="graph-inspector__stats"><span>流入 <strong>{inbound.length}</strong></span><span>流出 <strong>{outbound.length}</strong></span></div>
+            {selectedProfile && <div className="graph-node-dossier"><div><strong>{selectedProfile.role || "角色待确认"}</strong><span>权重 {Math.round(selectedProfile.weight * 100)}%</span></div><dl><div><dt>核心利益</dt><dd>{selectedProfile.interests.length ? selectedProfile.interests.join("、") : "未知"}</dd></div><div><dt>当前立场</dt><dd>{selectedProfile.stance || "未知"}</dd></div><div><dt>置信度</dt><dd>{selectedProfile.confidence === "high" ? "高" : selectedProfile.confidence === "medium" ? "中" : selectedProfile.confidence === "low" ? "低" : "未知"}</dd></div><div><dt>观察区间</dt><dd>{selectedProfile.firstSeen || "未知"} 至 {selectedProfile.lastSeen || "现在"}</dd></div></dl>{selectedNodeSources.length > 0 && <div className="graph-node-sources"><strong>主体证据</strong>{selectedNodeSources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" key={source.id}>{source.title}<ExternalLink size={12} /></a> : <span key={source.id}>{source.title}</span>)}</div>}</div>}
             <div className="graph-relation-list">{[...inbound, ...outbound].map((edge) => <button type="button" onClick={() => setSelection({ kind: "edge", id: edge.id })} key={edge.id}><strong>{edge.label}</strong><span>{activeDiagram.nodes.find((node) => node.id === edge.source)?.label} → {activeDiagram.nodes.find((node) => node.id === edge.target)?.label}</span></button>)}</div>
           </> : selectedEdge ? <>
             <span className="eyebrow">选中关系</span><h3>{selectedEdge.label}</h3><p>{edgeTypeLabels[selectedEdge.type] ?? selectedEdge.type}</p>
             <div className="graph-edge-path"><button type="button" onClick={() => focusNode(selectedEdge.source)}>{edgeSource?.label ?? selectedEdge.source}</button><span>→</span><button type="button" onClick={() => focusNode(selectedEdge.target)}>{edgeTarget?.label ?? selectedEdge.target}</button></div>
+            {selectedRelation ? <div className="graph-edge-evidence"><h4>为什么系统认为双方存在这条关系？</h4><strong>{relationStatusLabel} · {relationConfidenceLabel}</strong><div className="graph-edge-analysis"><span>关系强度 {selectedRelation.strength ?? 1}/5</span><span>{(selectedRelation.interestTypes ?? []).map((item) => interestTypeLabels[item] ?? item).join(" · ") || "利益类型未知"}</span><span>{directionLabels[selectedRelation.direction] ?? selectedRelation.direction} · {polarityLabels[selectedRelation.polarity] ?? selectedRelation.polarity}</span><span>{selectedRelation.validFrom || "时间未知"}{selectedRelation.validTo ? ` 至 ${selectedRelation.validTo}` : " 起"}</span></div>{researchStatus === "stale" && <p>这条绑定继承自上一版正文，尚未重新核验。</p>}{relationClaim && <><h4>对应判断</h4><p>{relationClaim.text}</p>{relationClaim.confidenceReasons.map((reason) => <p key={reason}>{reason}</p>)}</>}<h4>关系证据 · {selectedRelation.evidenceCount ?? relationSources.length} 条</h4>{relationSources.length ? relationSources.map((source) => source.url ? <a href={source.url} target="_blank" rel="noreferrer" aria-label={`${source.title}，打开关系证据`} key={source.id}><ExternalLink size={13} /><span><strong>{source.title}</strong><small>{source.qualityTier ? `${source.qualityTier} 级来源` : "来源等级未知"}</small>{source.excerpt && <small>{source.excerpt}</small>}</span></a> : <div key={source.id}><span><strong>{source.title}</strong>{source.excerpt && <small>{source.excerpt}</small>}</span></div>) : <p>当前关系没有可核验来源，只能作为推测使用。</p>}</div> : <div className="graph-edge-evidence graph-edge-evidence--empty"><strong>未建立边级证据绑定</strong><p>可查看下方整份报告的来源基础，但不能据此认定这些来源直接证明当前关系。</p></div>}
           </> : <>
             <span className="eyebrow">图谱检查器</span><h3>选择一个主体或关系</h3><p>点击画布节点查看流入与流出关系；点击连线查看关系类型和方向。</p>
             <div className="graph-node-index">{activeDiagram.nodes.slice(0, 12).map((node) => <button type="button" onClick={() => focusNode(node.id)} key={node.id}><span className={`graph-node-dot graph-node-dot--${node.type}`} />{node.label}</button>)}</div>
@@ -173,7 +189,7 @@ export function AnalysisNetwork({ taskId, markdown: currentMarkdown, materials =
 
       <section className="graph-evidence">
         <header><div><span className="eyebrow">证据基础</span><h3>报告引用与任务材料</h3></div><strong>{citations.length} 条公开引用 · {linkedMaterials.length} 份关联材料</strong></header>
-        <p className="graph-evidence__scope">以下内容是整份报告的来源基础，不表示后端已经建立到单个节点或关系的逐句证明映射。</p>
+        <p className="graph-evidence__scope">{research?.relations.length ? `当前研究账本已建立 ${research.relations.length} 条关系绑定；选中具体连线可检查对应证据。下列内容仍是整份报告的来源基础。` : "以下内容是整份报告的来源基础，不表示后端已经建立到单个节点或关系的逐句证明映射。"}</p>
         <div className="graph-evidence__columns">
           <div><h4>报告中的公开引用</h4>{citations.length ? citations.map((item) => <a href={item.url} aria-label={item.label} target="_blank" rel="noreferrer" key={item.id}><ExternalLink size={14} /><span><strong>{item.label}</strong><small>{item.detail}</small></span></a>) : <p>当前报告没有 Markdown 公开链接。</p>}</div>
           <div><h4>任务关联材料</h4>{linkedMaterials.length ? linkedMaterials.map((item) => <div className="graph-material" key={item.id}><FileText size={15} /><span><strong>{item.label}</strong><small>{item.detail}</small></span><em className={item.status === "error" ? "graph-material__status graph-material__status--error" : "graph-material__status"}>{item.status === "error" ? "解析告警" : "已关联"}</em></div>) : <p>当前任务没有关联材料。</p>}</div>

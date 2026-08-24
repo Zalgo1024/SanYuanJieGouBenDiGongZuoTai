@@ -37,7 +37,7 @@ $requiredPatterns = @(
     'startedBackend',
     'startedFrontend',
     'ConvertTo-Json',
-    'Start-Process.*http://127\.0\.0\.1:3000'
+    'Start-Process\s+\$frontendUrl'
 )
 
 foreach ($pattern in $requiredPatterns) {
