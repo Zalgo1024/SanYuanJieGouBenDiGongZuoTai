@@ -1,7 +1,9 @@
 """分析任务接口：提交分析 / 取结果 / 轮询 / 重试 / 实时进度（WebSocket）/ 下载产物。"""
 import logging
 import os
+import re
 import uuid
+import zipfile
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -9,6 +11,9 @@ from pydantic import BaseModel
 
 from app.db import SessionLocal
 from app import queue as taskq
+from app import rule_engine
+from app.generation_routing import GenerationRouteError, decide_generation_route
+from app.llm_settings_store import resolve_config
 from app.models import ReportVersion, Task, _now
 
 logger = logging.getLogger(__name__)
@@ -21,21 +26,63 @@ class AnalyzeRequest(BaseModel):
     input_text: str = ""
     analysis_type: str = "case"  # case | policy | org | opinion | combo
     project_id: str | None = None  # 预留（阶段三接入），可选
-    mode: str = "rule"  # rule(默认,离线内置引擎) | llm(可选 AI 插件,增强)
+    mode: str | None = None  # 旧客户端兼容字段
+    input_mode: str | None = None  # freeform | structured
+    requested_engine: str | None = None  # auto | rule | llm
     structured: dict | None = None  # rule 模式：结构化输入
     # llm 模式：每请求仅携带模型/温度/提示词版本 —— 不含 api_key（密钥只在后端，
     # 来自 data/llm_settings.json 或 .env，详见 /api/settings/llm）。
     llm_config: dict | None = None
     material_ids: list[str] | None = None  # 阶段三：本次分析使用的材料（证据出处）
     search: bool | None = None  # 阶段五：搜索开关 None=自动 | True=强制搜索 | False=跳过（保留兼容）
-    web: bool = False  # T8：联网写报告（检索/抓取素材注入）
+    web: bool = True  # 自由输入默认联网检索；用户可显式传 false 跳过
     source_urls: list[str] | None = None  # T8：用户勾选来源白名单（null=自动检索全部）
+
+
+def llm_is_available(llm_config: dict | None = None) -> bool:
+    """公共分析任务只认浏览器自己的 BYOK 配置，不使用服务器默认密钥。"""
+    if not llm_config or not llm_config.get("profile_id"):
+        return False
+    return bool(resolve_config(llm_config).get("api_key"))
 
 
 @router.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
+    requested_engine = req.requested_engine or req.mode or "auto"
+    try:
+        decision = decide_generation_route(
+            input_mode=req.input_mode,
+            requested_engine=requested_engine,
+            structured=req.structured,
+            llm_available=llm_is_available(req.llm_config),
+        )
+    except GenerationRouteError as exc:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "phase": "input_validation",
+                    "details": [],
+                }
+            },
+        )
+    if decision.input_mode == "structured":
+        validation = rule_engine.validate_structured_input(req.structured or {})
+        if not validation.valid:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": {
+                        "code": "invalid_structured_input",
+                        "message": "结构化录入缺少生成正式报告所需的数据。",
+                        "phase": "input_validation",
+                        "details": validation.missing_fields,
+                    }
+                },
+            )
     task_id = uuid.uuid4().hex
-    mode = req.mode if req.mode in ("rule", "llm") else "rule"
     with SessionLocal() as db:
         db.add(
             Task(
@@ -44,7 +91,9 @@ async def analyze(req: AnalyzeRequest):
                 input_text=req.input_text,
                 analysis_type=req.analysis_type,
                 project_id=req.project_id,
-                mode=mode,
+                mode=decision.selected_engine,
+                input_mode=decision.input_mode,
+                requested_engine=decision.requested_engine,
                 structured=req.structured,
                 llm_config=req.llm_config,
                 material_ids=req.material_ids or None,
@@ -87,6 +136,7 @@ def get_result(task_id: str):
             "phase": t.phase,
             "progress_pct": t.progress_pct or 0,
             "search_results": t.search_results,
+            "quality": t.quality_result,
         }
 
 
@@ -104,6 +154,9 @@ def retry_task(task_id: str):
         t = db.get(Task, task_id)
         if not t:
             return {"status": "not_found"}
+        # 互斥：原任务仍在排队/执行时拒绝重复重试，避免生成多份重复副本互相覆盖
+        if t.status in ("queued", "generating"):
+            return {"status": "busy", "message": "任务仍在执行中，请等待完成后再重试"}
         new_id = uuid.uuid4().hex
         new_task = Task(
             id=new_id,
@@ -112,6 +165,8 @@ def retry_task(task_id: str):
             analysis_type=t.analysis_type,
             project_id=t.project_id,
             mode=t.mode or "rule",
+            input_mode=t.input_mode,
+            requested_engine=t.requested_engine or t.mode or "auto",
             structured=t.structured,
             llm_config=t.llm_config,
             owner_id=t.owner_id,
@@ -165,6 +220,7 @@ def poll_task(task_id: str):
             "phase": t.phase,
             "progress_pct": t.progress_pct or 0,
             "search_results": t.search_results,
+            "quality": t.quality_result,
             "server_time": _now().isoformat(),
         }
 
@@ -178,7 +234,7 @@ async def ws_progress(task_id: str, ws: WebSocket):
         t = db.get(Task, task_id)
         if not t:
             await ws.send_json({"status": "not_found"})
-            taskq.unsubscribe(task_id)
+            taskq.unsubscribe(task_id, q)
             return
         snap_status = t.status
         snap_data = (
@@ -194,7 +250,7 @@ async def ws_progress(task_id: str, ws: WebSocket):
         snap_msg["progress_pct"] = snap_pct
     await ws.send_json(snap_msg)
     if snap_status in ("done", "error"):
-        taskq.unsubscribe(task_id)
+        taskq.unsubscribe(task_id, q)
         return
     try:
         while True:
@@ -205,15 +261,93 @@ async def ws_progress(task_id: str, ws: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        taskq.unsubscribe(task_id)
+        taskq.unsubscribe(task_id, q)
 
 
 @router.get("/api/download/{task_id}")
 def download(task_id: str, kind: str = "word", version: str | None = None):
+    from app.settings import settings
+
     with SessionLocal() as db:
         t = db.get(Task, task_id)
         if not t:
             return {"error": "not_found"}
+        # PPT：用（指定/最新）版本 Markdown 即时生成演示稿
+        if kind == "pptx":
+            from app.pptx_renderer import export_report_pptx
+
+            q = db.query(ReportVersion).filter(ReportVersion.task_id == task_id)
+            if version:
+                v = q.filter(ReportVersion.id == version).first()
+            else:
+                v = q.order_by(ReportVersion.created_at.desc()).first()
+            if not v:
+                return {"error": "version_not_found"}
+            exp = export_report_pptx(
+                t.title or "未命名报告",
+                v.content_markdown,
+                output_dir=settings.generated_dir,
+                slug=f"pptx_{task_id}",
+            )
+            pptx_path = exp.get("pptx")
+            if pptx_path and os.path.exists(pptx_path):
+                return FileResponse(pptx_path, filename=os.path.basename(pptx_path))
+            return {"error": "pptx_generation_failed"}
+        # 组合下载：Word + PDF + PPT + Markdown + 利益关系网络图 → 一个 zip 包
+        if kind == "zip":
+            from app.pptx_renderer import export_report_pptx
+
+            q = db.query(ReportVersion).filter(ReportVersion.task_id == task_id)
+            if version:
+                v = q.filter(ReportVersion.id == version).first()
+            else:
+                v = q.order_by(ReportVersion.created_at.desc()).first()
+            if not v:
+                return {"error": "version_not_found"}
+            safe = (
+                re.sub(r'[\\/:*?"<>|]', "-", (t.title or "未命名报告").strip())
+                or "未命名报告"
+            )
+            bundle_dir = os.path.join(settings.generated_dir, f"bundle_{task_id}")
+            os.makedirs(bundle_dir, exist_ok=True)
+            md_path = os.path.join(bundle_dir, f"{safe}.md")
+            with open(md_path, "w", encoding="utf-8") as fh:
+                fh.write(v.content_markdown or "")
+            exp = export_report_pptx(
+                t.title or "未命名报告",
+                v.content_markdown,
+                output_dir=bundle_dir,
+                slug="bundle",
+            )
+            zip_path = os.path.join(bundle_dir, f"{safe}_全套.zip")
+
+            def _zip_add(zf: zipfile.ZipFile, src: str, arcname: str) -> None:
+                info = zipfile.ZipInfo(arcname)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.flag_bits |= 0x800  # UTF-8 文件名（Windows 解压不乱码）
+                with open(src, "rb") as fh:
+                    zf.writestr(info, fh.read())
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                root = safe
+                _zip_add(zf, md_path, f"{root}/{safe}.md")
+                for field, ext in (("word", "docx"), ("pdf", "pdf")):
+                    stored = (t.result or {}).get(field)
+                    if stored and os.path.exists(stored):
+                        _zip_add(zf, stored, f"{root}/{safe}.{ext}")
+                pptx_path = exp.get("pptx")
+                if pptx_path and os.path.exists(pptx_path):
+                    _zip_add(zf, pptx_path, f"{root}/{safe}.pptx")
+                for i, diag in enumerate(exp.get("diagrams") or [], 1):
+                    png = diag.get("png")
+                    if png and os.path.exists(png):
+                        label = re.sub(
+                            r'[\\/:*?"<>|]', "-", str(diag.get("title") or f"图 {i}")
+                        )[:60]
+                        _zip_add(zf, png, f"{root}/利益关系网络图/{i}-{label}.png")
+            if os.path.exists(zip_path):
+                return FileResponse(zip_path, filename=os.path.basename(zip_path))
+            return {"error": "zip_generation_failed"}
         # 指定版本：用该版本 Markdown 即时导出（人工修订版也能下载）
         if version:
             v = (

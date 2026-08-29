@@ -34,44 +34,47 @@ def test_valid_rule_markdown_passes():
     assert repaired == md  # 合法内容不应被改动
 
 
-def test_missing_diagram_is_synthesized():
+def test_missing_diagram_is_rejected_without_structured_relations():
     md = (
         "# 标题\n\n## 案例事实摘要\n\n事实\n\n## 分析框架说明\n\nx\n\n"
         "## 三元结构分析正文\n\ny\n\n## 结论\n\nz\n"
     )
     repaired, contract = validate_and_repair(md, "case")
-    assert contract["diagram_synthetic"] is True
-    assert contract["diagram_ok"] is True
-    assert "```DIAGRAM" in repaired
+    assert contract["diagram_synthetic"] is False
+    assert contract["diagram_ok"] is False
+    assert "```DIAGRAM" not in repaired
+    assert contract["degrade"] is True
 
 
-def test_invalid_diagram_json_is_synthesized():
+def test_invalid_diagram_json_is_not_replaced_with_a_placeholder():
     md = (
         "# 标题\n\n```DIAGRAM\n{not valid json\n```\n\n"
         "## 案例事实摘要\n\nx\n\n## 分析框架说明\n\nx\n\n"
         "## 三元结构分析正文\n\nx\n\n## 结论\n\nx\n"
     )
     repaired, contract = validate_and_repair(md, "case")
-    assert contract["diagram_synthetic"] is True
-    assert contract["diagram_ok"] is True
+    assert contract["diagram_synthetic"] is False
+    assert contract["diagram_ok"] is False
+    assert "利益关系图（占位）" not in repaired
 
 
-def test_missing_sections_reported_and_patched():
+def test_missing_sections_are_reported_without_placeholder_patch():
     md = (
         "# 标题\n\n```DIAGRAM\n"
         '{"viz":"network","title":"t","nodes":[{"id":"a","label":"A","type":"actor"}],"edges":[]}\n```\n'
     )
     repaired, contract = validate_and_repair(md, "case")
     assert len(contract["missing_sections"]) > 0
-    assert contract["repaired"] is True
+    assert contract["repaired"] is True  # 仅补版权行
     for s in REQUIRED_SECTIONS["case"]:
-        assert f"## {s}" in repaired, f"缺失章节应被补齐：{s}"
+        assert f"## {s}" not in repaired, f"缺失章节不应被伪造：{s}"
+    assert "已补占位" not in repaired
 
 
 def test_degrade_when_synthetic_and_missing_sections():
     md = "# 标题\n\n只有正文，没有利益关系图，也没有必要章节。\n"
     repaired, contract = validate_and_repair(md, "case")
-    assert contract["diagram_synthetic"] is True
+    assert contract["diagram_synthetic"] is False
     assert len(contract["missing_sections"]) > 0
     assert contract["degrade"] is True
 
@@ -81,3 +84,50 @@ def test_policy_required_sections():
     assert "独立事实摘要" in req
     assert "结论与推导" in req
     assert "案例事实摘要" not in req
+
+
+def test_combo_missing_sentinel_is_type_mismatch():
+    """组合模式缺哨兵（连 2 类都没有）→ type_mismatch。"""
+    from app.prompt_builder import SENTINEL_SECTIONS
+
+    # 构造一段没有任何哨兵章节的纯正文（含必要章节的 case 骨架）
+    md = (
+        "# 组合测试\n\n## 案例事实摘要\n\n事实\n\n## 分析框架说明\n\nx\n\n"
+        "## 三元结构分析正文\n\ny\n\n## 结论\n\nz\n\n"
+        "## 附录\n\n来源\n"
+    )
+    repaired, contract = validate_and_repair(md, "combo")
+    assert contract["type_mismatch"] is True
+    assert any("组合模式类型一致性缺失" in e for e in contract["errors"])
+
+
+def test_org_missing_sentinel_is_type_mismatch():
+    """组织诊断缺哨兵章节 → type_mismatch，且不静默通过。"""
+    md = (
+        "# 组织测试\n\n## 组织画像\n\n内部结构\n\n## 结论\n\n总结\n"
+    )
+    repaired, contract = validate_and_repair(md, "org")
+    assert contract["type_mismatch"] is True
+    assert any("类型一致性缺失" in e for e in contract["errors"])
+
+
+def test_org_with_all_sentinels_passes():
+    """组织诊断含全部哨兵 → 不判 type_mismatch（回归：缺哨兵才算）"""
+    from app.prompt_builder import SENTINEL_SECTIONS
+
+    body = ["# 组织测试"]
+    for s in SENTINEL_SECTIONS.get("org", []):
+        body.append(f"## {s}\n\n内容占位")
+    body.append("## 结论\n\n总结")
+    repaired, contract = validate_and_repair("\n\n".join(body), "org")
+    assert contract["type_mismatch"] is False, contract["errors"]
+
+
+def test_numbered_section_prefix_not_counted_as_missing():
+    """回归：带中文编号前缀的必要章节（「## 一、组织画像」）不应被误判缺失。"""
+    md = (
+        "# 编号前缀测试\n\n## 一、案例事实摘要\n\n事实\n\n## 二、分析框架说明\n\nx\n\n"
+        "## 三、三元结构分析正文\n\ny\n\n## 四、结论\n\nz\n"
+    )
+    repaired, contract = validate_and_repair(md, "case")
+    assert contract["missing_sections"] == [], contract["missing_sections"]

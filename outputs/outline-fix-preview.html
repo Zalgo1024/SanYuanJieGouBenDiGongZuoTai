@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>目录穿模修复预览</title>
+<style>
+  :root{
+    --line:#e3e7ee;
+    --surface:#ffffff;
+    --ink:#1c2733;
+    --ink-muted:#69748a;
+    --accent:#2f6fed;
+    --accent-soft:#eaf1ff;
+    --shadow:0 6px 22px rgb(25 42 65 / .07);
+  }
+  body{font-family:-apple-system,BlinkMacSystemSystem,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f6fa;color:var(--ink);margin:0;padding:28px;}
+  h3{font-size:15px;margin:0 0 12px;}
+  .demo{display:grid;grid-template-columns:165px minmax(0,1fr) 270px;gap:26px;align-items:start;max-width:1000px;margin:0 auto;}
+  .muted{color:var(--ink-muted);font-size:12px;line-height:1.7;}
+
+  /* ===== 修复后的目录（与 globals.css 一致） ===== */
+  .report-reader .report-outline{
+    position:sticky;top:18px;min-width:0;grid-template-columns:1fr;
+    max-height:calc(100vh - 36px);overflow:hidden auto;overscroll-behavior:contain;scrollbar-width:thin;
+    align-self:start;display:grid;gap:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:17px 10px;box-shadow:var(--shadow);
+  }
+  .report-reader .report-outline .eyebrow{padding:0 8px 9px;color:var(--ink-muted);font-size:11px;font-weight:700;letter-spacing:.04em;}
+  .report-reader .report-outline a{
+    display:block;position:relative;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    border-left:1px solid var(--line);color:var(--ink-muted);padding:8px 10px;font-size:12px;text-decoration:none;
+    transition:border-color .15s,color .15s,background-color .15s;
+  }
+  .report-reader .report-outline a:hover{border-color:var(--accent);color:var(--accent);}
+  .report-reader .report-outline a[aria-current="location"]{border-left-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:800;}
+
+  .doc{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:18px;}
+  .doc h2{font-size:18px;margin:0 0 8px;}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px;}
+  .panel .eyebrow{color:var(--ink-muted);font-size:11px;font-weight:700;}
+  .panel ul{margin:8px 0 0;padding-left:16px;font-size:12px;color:var(--ink-muted);}
+</style>
+</head>
+<body>
+<h3>修复后的报告目录（左侧）—— 长标题自动省略号，不再溢出到正文</h3>
+<div class="demo">
+  <aside class="report-outline" aria-label="报告目录">
+    <span class="eyebrow">目录</span>
+    <a href="#">01 报告封面</a>
+    <a href="#">02 任务元数据</a>
+    <a href="#" aria-current="location">03 一、关于本次事件的背景与各方立场的总体概述说明</a>
+    <a href="#">04 二、核心冲突的多维拆解与利益格局分析</a>
+    <a href="#">05 三、政策传导路径与可核验的事实锚点梳理</a>
+    <a href="#">06 四、结论与下一步行动建议的完整叙述</a>
+  </aside>
+  <div class="doc">
+    <h2>报告正文区域</h2>
+    <p class="muted">这里是正文。左侧目录的第三条标题很长，但因加了 <code>grid-template-columns:1fr</code> 与 <code>display:block</code> + <code>text-overflow:ellipsis</code>，它会在 165px 宽度内截断并出现省略号，而不会溢出到本区域（穿模）。</p>
+  </div>
+  <aside class="panel">
+    <span class="eyebrow">版本记录</span>
+    <ul><li>v3 当前</li><li>v2 修订</li><li>v1 初始</li></ul>
+  </aside>
+</div>
+</body>
+</html>

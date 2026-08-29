@@ -69,6 +69,13 @@ class Settings:
         # 检索策略：auto(默认，BING→BRAVE→DDG 自动降级) | bing | brave | duckduckgo
         self.search_strategy: str = os.environ.get("SEARCH_STRATEGY", "auto").lower()
 
+        # —— 公共部署模式（对外公测/多用户）：开启后 resolve_config 不再回退
+        # 服务器 .env / 全局 store 的密钥，所有访客必须自带 API Key（BYOK），
+        # 防止服务器管理员遗留的密钥被公共流量白嫖。
+        self.public_mode: bool = (
+            os.environ.get("PUBLIC_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+
     @property
     def search_configured(self) -> bool:
         """是否具备可用的检索能力（T1 起：DDG HTML 零 Key 恒可执行）。

@@ -37,7 +37,7 @@ project_root/（本仓库 = 内核 + 后端 API + Next.js 前端完整项目）
 │   │   ├── engine_bridge.py     ← 内核黑盒门面（调 export_from_text）
 │   │   ├── models.py / db.py    ← SQLite（Task/Project/ReportVersion 版本留痕）
 │   │   └── routers/             ← analyze/tasks/search/cases/reports/…
-│   └── tests/                   ← 67 个后端测试
+│   └── tests/                   ← 124 个后端测试
 │
 ├── frontend/                    ← Next.js 15 本地工作台（只调用本仓库 backend API）
 │   ├── src/app/                 ← 首页、分析、项目、报告、利益关系网络、设置等路由
@@ -71,7 +71,7 @@ project_root/（本仓库 = 内核 + 后端 API + Next.js 前端完整项目）
 ## 一键启动（本地工作台）
 
 ```
-双击 start.bat
+双击「启动工作台.bat」（推荐入口，指向 start.bat）或 start.bat
 ```
 - 前端 Next.js :3000；启动后自动打开 `http://127.0.0.1:3000`
 - 后端 FastAPI :8000（绑 127.0.0.1，优先用 `backend/.venv`；缺失则回退系统 python），交互文档位于 `http://127.0.0.1:8000/docs`
@@ -108,6 +108,8 @@ project_root/（本仓库 = 内核 + 后端 API + Next.js 前端完整项目）
 | `cases/run_public_opinion_demo.py` | 一场平台算法限流争议的舆情七段式拆解（示例/模板） | 2026-07-27 | 舆情分析（7段式）模板与自测：演示七段结构，正文为占位示例；真实使用时替换 BODY 即可，引擎自动路由为舆情报告 |
 | `cases/run_fang_xinghai_investigation_org_policy_opinion.py` | 方星海被查事件：任期政策取向与量化交易支持逻辑评估 | 2026-07-27 | 组合分析（舆情 + 组织 + 政策），区分调查事实、公开政策取向、制度性推断与未证实个人利益，含职务关系、利益网络与量化支持逻辑 |
 
+> **2026-08-03 深度重写批次**：除方星海、饭圈到性别动员外，其余 9 个案例已按最新方法论深度重写并重新生成（补全景利益关系网络图、附录来源 URL 可点击、DIAGRAM 节点 type 六类利益配色、事件哨兵路由修正、标题冒号化与反 AI 味收敛、乱码修复）。产物在 `reports/` 下覆盖生成（旧产物已自动归档为 `.bak_时间戳`）。
+
 **规则**：
 - 新案例脚本统一存放在 `cases/` 目录，不要放在项目根目录
 - 脚本为一次性产物，用完即弃；报告文件在 `reports/` 中持久保留
@@ -122,7 +124,7 @@ project_root/（本仓库 = 内核 + 后端 API + Next.js 前端完整项目）
 | 报告类型 | 触发章节（命中其一即路由） | 章节顺序模板 |
 |---|---|---|
 | 政策分析 | 含 `policy_portrait` / `case_portrait` 等 8 段式章节 | 8 段式 |
-| 事件/案例分析 | 含 `event_portrait` 等事件章节 | 5 段式 / 深度 8 段式 |
+| 事件/案例分析 | 含 `case_portrait` / `case_flows` / `case_dynamics` 等事件章节（注意：哨兵前缀是 `case_`，不是 `event_`） | 5 段式 / 深度 8 段式 |
 | 组织诊断 | 含 `org_portrait` / `org_structure` / `org_survival` / `org_reproduction` / `org_interest_network` / `org_reverse` / `org_transformation` 任一项 | 9 段式 |
 | 舆情分析 | 含 `opinion_event` / `opinion_actors` / `opinion_narrative` / `opinion_trilife` / `opinion_reverse` / `opinion_evolution` 任一项 | 7 段式（事件与时间线 → 利益主体与沉默方 → 叙事竞争矩阵 → 三元生命维度 → 逆反性质与层级 → 演化曲线与系统回应 → 核心判断 → 附录） |
 | **组合（源序）** | 同时命中 ≥2 种模式的哨兵（如 `opinion_event`+`case_portrait`+`org_portrait`+`policy_portrait`） | 按作者书写**源序**依次渲染各模式章节——命名空间互不重叠者直接拼；政策+事件共享「事实摘要/分析框架/三元结构分析正文」三件套，写一次=共享引言、写两次=各成一段，不再静默覆盖。单模式仍走上方 canonical 序（零回归）。详见 `组合报告模式_L2设计.md` |
@@ -132,6 +134,8 @@ project_root/（本仓库 = 内核 + 后端 API + Next.js 前端完整项目）
 ### 章节序号统一规则
 
 所有正式报告的一级章节序号由 `docx_renderer.py` 按该报告模式的渲染顺序统一生成，使用中文序号（如“一、”“二、”）。案例脚本可以写有序号，也可以不写；渲染器会先清理已有的中文或阿拉伯数字前缀，再按实际章节位置补齐，避免重复编号。政策、事件、组织等所有模式均适用，`三元结构分析正文` 也计入并显示为正式章节，保证目录和正文连续一致。
+
+**两级编号来源并存（有意设计）**：一级（`##`）序号由渲染器统一生成；三级（`###`）子标题序号由 `engine.py` 调用的 `auto_number_headings` 按「每 H2 段落重置」的阿拉伯数字规则生成（H2 上的 auto_number 编号会被渲染器清掉重编，故 H2 实际以渲染器为准）。`auto_number_headings` 的编号表上限为「二十」（组合报告超 20 个 H2 时第 21 个起原样保留，不编号、不崩溃）。
 
 ### DIAGRAM 可视化图表（三类）
 
@@ -157,6 +161,23 @@ project_root/（本仓库 = 内核 + 后端 API + Next.js 前端完整项目）
 4. **写新脚本时复制 run_report.py 模板**，不要另起炉灶
 5. **未知时先问** — 不理解需求时先提问，不要猜测
 6. **数据来源可溯源** — 附录中每条来源必须标注具体出处名称 + `[链接](url)`，禁止"综合网络信息"等笼统写法。确保每条来源在 Word 和 PDF 中均可点击打开
+
+### 改代码防崩护栏（回归测试）
+
+**目的**：改功能 / 优化 / 新增核心功能时，确保不把已跑通的核心能力搞崩。**任何改动交付前，必须跑一遍一键体检确认全绿。**
+
+- **一键体检**：双击根目录 `体检.bat`（或 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-all.ps1`）。
+  四层依次跑：内核测试（章节编号/交付章节/网络图安全/XML 消毒）→ 后端核心测试（质量闸门/路由/合同/规则引擎/搜索）→ 前端 vitest → 前端 build。全绿 = 核心功能未受影响。
+- **核心模块红线**（动这些文件前先跑对应层测试，改完跑全测）：
+  - 内核：`engine.py`（唯一出口 `export_from_text`）、`parser.py`、`docx_renderer.py`、`viz_network.py`、`pdf_converter.py` → 内核测试层
+  - 后端：`backend/app/rule_engine.py`、`generator.py`、`report_quality.py`、`contract.py`、`generation_routing.py`、`prompt_builder.py`、`routers/analyze.py` → 后端核心测试层
+  - 前端：`frontend/src/lib/`（workspace-api/realtime/store）、`frontend/src/components/` → 前端 vitest 层
+- **标准动作**（改任何核心模块）：
+  1. 改前：跑对应层测试，确认基线绿（现在就是绿）
+  2. 改：小步改，改一处
+  3. 改后：跑 `体检.bat` 全测，绿才交付
+- **端到端测试**（`test_api.py`/`test_e2e.py`/`test_progress_chain.py`/`test_export.py`/`test_generator_split.py`）涉及真实 LLM 调用与 docx 导出，**不在一键体检内**（慢且碰外部服务），需要时单独在真机手动跑。
+- **测试也要更新**：改了行为，同步改对应测试的断言，避免"测试过但测的是旧行为"。
 
 ### 命名规范
 

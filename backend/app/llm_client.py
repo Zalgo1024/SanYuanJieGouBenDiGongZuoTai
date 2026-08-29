@@ -81,7 +81,14 @@ class LLMError(Exception):
         super().__init__(message)
 
 
-def _call_chat(client, model: str, messages: list, temperature: float, timeout: float = 60.0) -> str:
+def _call_chat(
+    client,
+    model: str,
+    messages: list,
+    temperature: float,
+    timeout: float = 60.0,
+    max_tokens: int | None = None,
+) -> str:
     """统一封装 OpenAI 兼容聊天调用：加超时、把异常分类为 LLMError。
 
     要求 openai SDK 已安装（懒导入，避免无 key 的 rule 模式下导入失败）。
@@ -101,6 +108,7 @@ def _call_chat(client, model: str, messages: list, temperature: float, timeout: 
             messages=messages,
             temperature=temperature,
             timeout=timeout,
+            **({"max_tokens": max_tokens} if max_tokens else {}),
         )
     except RateLimitError:
         raise LLMError(
@@ -215,6 +223,40 @@ class GenericOpenAIClient(BaseLLM):
             ],
             kwargs.get("temperature", 0.7),
         )
+
+
+def test_connection(
+    api_key: str, base_url: str | None, model: str, timeout: float = 15.0
+) -> dict:
+    """最小代价验证一套 LLM 连接配置（key / base_url / model）。
+
+    发一个 max_tokens=8 的 "ping" 请求；不保存任何配置、不落盘。
+    返回 {ok, kind, message}，kind 与 LLMError 分类一致，前端可直接展示。
+    """
+    if not (api_key or "").strip():
+        return {"ok": False, "kind": "config", "message": "API Key 为空，无法测试。"}
+    if not (base_url or "").strip():
+        return {"ok": False, "kind": "config", "message": "API 地址为空，无法测试。"}
+    if not (model or "").strip():
+        return {"ok": False, "kind": "config", "message": "模型名称为空，无法测试。"}
+
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key.strip(), base_url=base_url.strip() or None)
+    try:
+        _call_chat(
+            client,
+            model.strip(),
+            [{"role": "user", "content": "ping"}],
+            0.0,
+            timeout=timeout,
+            max_tokens=8,
+        )
+    except LLMError as exc:
+        return {"ok": False, "kind": exc.kind, "message": exc.message}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "kind": "api_error", "message": f"未知错误：{exc}"}
+    return {"ok": True, "kind": "", "message": "连接成功，这套配置可以正常生成。"}
 
 
 def create_llm() -> BaseLLM:

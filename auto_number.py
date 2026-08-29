@@ -51,7 +51,9 @@ def auto_number_headings(body: str) -> str:
             h2_counter += 1
             h3_counter = 0
             in_h2 = True
-            if not _is_numbered(text) and h2_counter <= len(CN_NUM):
+            # 编号表 CN_NUM 索引 0..20（到"二十"）；超出上限则不再编号，
+            # 否则 CN_NUM[h2_counter] 会 IndexError（组合报告可达 21+ 个 H2）。
+            if not _is_numbered(text) and h2_counter < len(CN_NUM):
                 prefix = CN_NUM[h2_counter]
                 # 保持原始缩进（空格）
                 indent = line[:len(line) - len(line.lstrip())]

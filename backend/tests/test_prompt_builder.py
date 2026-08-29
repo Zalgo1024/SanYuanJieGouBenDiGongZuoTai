@@ -36,6 +36,9 @@ def test_combo_prompt_requires_multi_type():
     """combo 提示词必须显式要求「至少 2 类哨兵混编」，而非强制单类。"""
     prompt = build_system_prompt("combo")
     assert "2 类" in prompt or "两类" in prompt or "至少" in prompt
+    for section in ("核心冲突点", "三元结构分析正文", "行动建议", "附录"):
+        assert f"## {section}" in prompt
+    assert "短横线列表" in prompt
 
 
 def test_org_prompt_has_full_nine_section_skeleton():

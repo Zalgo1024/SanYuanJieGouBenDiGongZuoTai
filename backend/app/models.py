@@ -17,9 +17,11 @@ from sqlalchemy import (
     ForeignKey,
     Float,
     Integer,
+    Index,
     JSON,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import relationship
 
@@ -95,7 +97,9 @@ class Task(Base):
     attempt_no = Column(Integer, default=1)  # 第几次尝试（1=首次）
 
     # —— 生成模式（2.4 内置规则引擎 + 可选 LLM 插件）——
-    mode = Column(String(16), default="rule")  # rule(默认,离线) | llm(可选插件)
+    mode = Column(String(16), default="rule")  # 实际执行引擎：rule | llm
+    input_mode = Column(String(16), nullable=True)  # freeform | structured
+    requested_engine = Column(String(16), nullable=True)  # auto | rule | llm
     structured = Column(JSON, nullable=True)   # rule 模式：结构化输入
     llm_config = Column(JSON, nullable=True)    # llm 模式：每请求 {api_key,base_url,model}
 
@@ -106,6 +110,11 @@ class Task(Base):
     # —— 阶段三：分析使用到的材料（Material.id 列表，记录证据出处）——
     material_ids = Column(JSON, nullable=True)
 
+    # —— 报告后续研究任务：基于指定版本补充证据，不与新分析混在一起 ——
+    operation = Column(String(24), default="analysis")  # analysis | enrichment
+    target_task_id = Column(String(32), ForeignKey("tasks.id"), nullable=True, index=True)
+    base_version_id = Column(String(32), nullable=True, index=True)
+
     # —— 阶段五：全网搜索（可选增强）——
     search_enabled = Column(Boolean, nullable=True)  # None=自动 | True=强制搜索 | False=跳过
     search_results = Column(JSON, nullable=True)      # 搜索结果摘要 {query,snippets,sources,provider}
@@ -113,12 +122,17 @@ class Task(Base):
     # —— T8：联网写报告（web 开关 + 用户勾选来源白名单）——
     web = Column(Boolean, default=False)              # True=联网检索/抓取素材写报告
     source_urls = Column(JSON, nullable=True)          # 用户勾选白名单（null=自动检索全部）
+    monitor_id = Column(String(32), ForeignKey("research_monitors.id"), nullable=True, index=True)
 
     # —— 阶段四：LLM 增强模式元信息（仅在 llm 模式记录，便于复现与审计）——
     llm_model = Column(String(120), nullable=True)       # 实际使用的模型（如 deepseek-chat）
     llm_temperature = Column(Float, nullable=True)        # 采样温度
     prompt_version = Column(String(32), nullable=True)    # 提示词版本（可复现）
     llm_raw_response = Column(Text, nullable=True)        # LLM 原始响应（截断存储，调试用）
+
+    # —— 报告写作规格的可执行质量闸门 ——
+    quality_score = Column(Integer, nullable=True)
+    quality_result = Column(JSON, nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=_now)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -137,7 +151,20 @@ class ReportVersion(Base):
     """
 
     __tablename__ = "report_versions"
-
+    __table_args__ = (
+        Index(
+            "uq_report_versions_task_version",
+            "task_id",
+            "version_no",
+            unique=True,
+        ),
+        Index(
+            "uq_report_versions_one_current",
+            "task_id",
+            unique=True,
+            sqlite_where=text("is_current = 1"),
+        ),
+    )
     id = Column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
     task_id = Column(
         String(32),
@@ -145,7 +172,7 @@ class ReportVersion(Base):
         nullable=False,
         index=True,
     )
-    kind = Column(String(16), default="revised")  # original | revised
+    kind = Column(String(16), default="revised")  # original | revised | enriched
     content_markdown = Column(Text, nullable=False)
     content_html = Column(Text, nullable=True)
     note = Column(String(500), nullable=True)  # 修订说明
@@ -157,8 +184,53 @@ class ReportVersion(Base):
     edited_by = Column(String(16), default="ai")         # human | ai
     summary = Column(String(500), nullable=True)         # 改动摘要
     is_current = Column(Integer, default=0)              # 0/1 当前版本标记
+    research_snapshot = Column(JSON, nullable=True)      # 与本版本正文绑定的证据—判断账本
+    research_status = Column(String(16), default="unavailable")  # verified | fallback | stale | unavailable
 
     task = relationship("Task")
+
+
+class ResearchMonitor(Base):
+    """Local scheduled re-analysis configuration for one project."""
+
+    __tablename__ = "research_monitors"
+
+    id = Column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
+    project_id = Column(
+        String(64), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    seed_task_id = Column(String(32), ForeignKey("tasks.id"), nullable=False)
+    enabled = Column(Boolean, default=False)
+    interval_hours = Column(Integer, default=24)
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    next_run_at = Column(DateTime(timezone=True), nullable=True)
+    last_task_id = Column(String(32), ForeignKey("tasks.id"), nullable=True)
+    last_success_task_id = Column(String(32), ForeignKey("tasks.id"), nullable=True)
+    latest_change = Column(JSON, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_now)
+    updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class BenchmarkRun(Base):
+    """One repeatable same-task comparison across system, general AI and human work."""
+
+    __tablename__ = "benchmark_runs"
+
+    id = Column(String(32), primary_key=True, default=lambda: uuid.uuid4().hex)
+    task_id = Column(String(32), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    version_id = Column(String(32), ForeignKey("report_versions.id", ondelete="SET NULL"), nullable=True)
+    system_snapshot = Column(JSON, nullable=False)
+    general_snapshot = Column(JSON, nullable=True)
+    human_snapshot = Column(JSON, nullable=True)
+    audits = Column(JSON, nullable=True)
+    durations = Column(JSON, nullable=True)
+    candidate_metadata = Column(JSON, nullable=True)
+    preference = Column(String(16), default="unset")
+    notes = Column(Text, nullable=True)
+    result = Column(JSON, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_now)
+    updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 class Material(Base):

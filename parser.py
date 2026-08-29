@@ -69,11 +69,16 @@ class ParsedReport:
 # ── 章节标识映射 ─────────────────────────────────────────────
 
 _SECTION_IDS: dict[str, str] = {
+    "情况概述": "overview",
     "案例事实摘要": "fact_summary",
     "事实摘要": "fact_summary",
+    "独立事实摘要": "fact_summary",
+    "证据与依据": "evidence",
     "分析框架": "framework",
     "分析框架说明": "framework",
     "三元结构分析正文": "analysis_body",
+    "核心冲突点": "core_conflicts",
+    "行动建议": "recommendations",
     "政策对象图谱": "policy_portrait",
     "政策权重与空间分析": "policy_weight",
     # ── 深度事件分析新增章节（对标政策分析的对象图谱/权重空间） ──
@@ -117,6 +122,7 @@ _SECTION_IDS: dict[str, str] = {
     "演化曲线与系统回应": "opinion_evolution",
     "舆情演化曲线": "opinion_evolution",
     "结论": "conclusion",
+    "诊断结论": "conclusion",
     "结论与推导": "conclusion",
     "核心判断": "conclusion",
     "核心判断与走向": "conclusion",
@@ -339,6 +345,22 @@ def parse_report(text: str) -> ParsedReport:
                 )
             continue
 
+        # ── 普通代码块（非 DIAGRAM，如 ```python ... ```） ──
+        # 保留围栏与内容作为 code 块，避免开/闭围栏被丢弃、内容错乱进正文
+        if stripped.startswith("```"):
+            code_lines: list[str] = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1  # 跳过结尾 ```
+            if current_section is not None:
+                content = "\n".join(code_lines).strip("\n")
+                current_section.blocks.append(
+                    Block(type="code", text=f"```{stripped[3:].strip()}\n{content}\n```")
+                )
+            continue
+
         # ── 表格 ──
         if _is_table_line(line):
             rows: list[list[str]] = []
@@ -448,6 +470,8 @@ def get_section_text(report: ParsedReport, section_id: str) -> str:
         if block.type == "paragraph":
             parts.append(block.text)
         elif block.type == "quote":
+            parts.append(block.text)
+        elif block.type == "code":
             parts.append(block.text)
         elif block.type == "table" and block.rows:
             for row in block.rows:

@@ -8,13 +8,21 @@
 """
 import logging
 import os
+import uuid
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from app.db import SessionLocal
 from app.generator import ReportGenerator
 from app.models import Project, ReportVersion, Task
+from app.report_version_service import (
+    create_report_version,
+    ensure_original_version,
+    set_current_version,
+)
+from app.research_changes import compare_research_ledgers
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -33,38 +41,13 @@ def _version_meta(v: ReportVersion, current_id: str | None) -> dict:
         "editor": v.editor,
         "created_at": v.created_at.isoformat() if v.created_at else None,
         "is_current": v.id == current_id,
+        "research_status": v.research_status or "unavailable",
     }
 
 
 def _ensure_original_version(db, task: Task) -> ReportVersion:
     """首次访问时，把生成引擎产出的 Markdown 播种为 kind='original' 版本（v1），确保原始稿不丢。"""
-    existing = (
-        db.query(ReportVersion)
-        .filter(ReportVersion.task_id == task.id, ReportVersion.kind == "original")
-        .first()
-    )
-    if existing:
-        return existing
-    md = (task.result or {}).get("markdown") or ""
-    original = ReportVersion(
-        task_id=task.id,
-        kind="original",
-        version_no=1,
-        edited_by="ai",
-        summary="自动生成（联网检索）" if (task.web or task.search_enabled) else "自动生成",
-        content_markdown=md,
-        note="生成引擎原始稿",
-        editor="系统",
-        is_current=1,
-    )
-    db.add(original)
-    # 该任务其它版本（如有）取消 current
-    db.query(ReportVersion).filter(ReportVersion.task_id == task.id).update(
-        {ReportVersion.is_current: 0}
-    )
-    db.commit()
-    db.refresh(original)
-    return original
+    return ensure_original_version(db, task)
 
 
 def _current_version(db, task_id: str) -> ReportVersion | None:
@@ -108,6 +91,74 @@ def get_report_versions(task_id: str):
         }
 
 
+@router.get("/api/reports/{task_id}/research")
+def get_report_research(task_id: str, version_id: str | None = None):
+    """Return the evidence-to-judgment snapshot bound to one report version."""
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        if not task:
+            return {"status": "not_found"}
+        _ensure_original_version(db, task)
+        if version_id:
+            version = (
+                db.query(ReportVersion)
+                .filter(ReportVersion.id == version_id, ReportVersion.task_id == task_id)
+                .first()
+            )
+        else:
+            version = _current_version(db, task_id)
+        if version is None:
+            return {"status": "not_found"}
+        return {
+            "task_id": task_id,
+            "version_id": version.id,
+            "version_no": version.version_no or 1,
+            "research_status": version.research_status or "unavailable",
+            "research": version.research_snapshot,
+        }
+
+
+@router.get("/api/reports/{task_id}/changes")
+def get_report_changes(
+    task_id: str,
+    from_version_id: str | None = None,
+    to_version_id: str | None = None,
+):
+    """Compare two version-bound research snapshots without asking the LLM."""
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        if not task:
+            return {"status": "not_found"}
+        _ensure_original_version(db, task)
+        rows = (
+            db.query(ReportVersion)
+            .filter(ReportVersion.task_id == task_id)
+            .order_by(ReportVersion.version_no.asc(), ReportVersion.created_at.asc())
+            .all()
+        )
+        if not rows:
+            return {"status": "not_found"}
+        by_id = {row.id: row for row in rows}
+        target = by_id.get(to_version_id) if to_version_id else _current_version(db, task_id)
+        if target is None:
+            return {"status": "not_found"}
+        if from_version_id:
+            source = by_id.get(from_version_id)
+        else:
+            earlier = [row for row in rows if (row.version_no or 1) < (target.version_no or 1)]
+            source = earlier[-1] if earlier else None
+        changes = compare_research_ledgers(
+            source.research_snapshot if source else None,
+            target.research_snapshot,
+        )
+        return {
+            "task_id": task_id,
+            "from_version_id": source.id if source else None,
+            "to_version_id": target.id,
+            "changes": changes,
+        }
+
+
 class SaveVersionRequest(BaseModel):
     content_html: str = ""
     content_markdown: str = ""
@@ -126,37 +177,105 @@ def save_report_version(task_id: str, req: SaveVersionRequest):
         if not t:
             return {"status": "not_found"}
         _ensure_original_version(db, t)
-        max_no = (
-            db.query(ReportVersion.version_no)
-            .filter(ReportVersion.task_id == task_id)
-            .order_by(ReportVersion.version_no.desc())
-            .first()
-        )
-        next_no = (max_no[0] if max_no and max_no[0] else 0) + 1
-        v = ReportVersion(
+        v = create_report_version(
+            db,
             task_id=task_id,
-            kind="revised",
-            version_no=next_no,
-            edited_by="human",
-            summary=req.note or "手动修订",
             content_markdown=req.content_markdown or "",
             content_html=req.content_html or None,
             note=req.note or None,
+            edited_by="human",
             editor=settings.default_owner_name,
-            is_current=1,
         )
-        db.query(ReportVersion).filter(ReportVersion.task_id == task_id).update(
-            {ReportVersion.is_current: 0}
-        )
-        db.add(v)
-        db.commit()
-        db.refresh(v)
         return _version_meta(v, v.id)
 
 
 class ReviseRequest(BaseModel):
     instruction: str
     llm_config: dict | None = None
+
+
+class EnrichmentRequest(BaseModel):
+    instruction: str = "核验并补充当前报告的证据缺口"
+    material_ids: list[str] = Field(default_factory=list)
+    web: bool = False
+    source_urls: list[str] = Field(default_factory=list)
+    llm_config: dict | None = None
+
+
+@router.post("/api/reports/{task_id}/enrichments", status_code=202)
+def create_enrichment_job(task_id: str, req: EnrichmentRequest):
+    """Queue an evidence-enrichment job bound to the report's current version."""
+    if not req.material_ids and not req.web and not req.source_urls:
+        return JSONResponse(
+            {
+                "error": "evidence_required",
+                "message": "请至少选择一份材料，或开启联网检索。",
+            },
+            status_code=422,
+        )
+
+    with SessionLocal() as db:
+        target = db.get(Task, task_id)
+        if target is None:
+            return JSONResponse(
+                {"error": "task_not_found", "message": "报告不存在。"},
+                status_code=404,
+            )
+        if target.status != "done":
+            return JSONResponse(
+                {"error": "report_not_ready", "message": "报告尚未完成，暂时不能补充证据。"},
+                status_code=409,
+            )
+        _ensure_original_version(db, target)
+        current = _current_version(db, task_id)
+        if current is None:
+            return JSONResponse(
+                {"error": "version_not_found", "message": "当前报告版本不存在。"},
+                status_code=404,
+            )
+        effective_config = req.llm_config or target.llm_config
+
+        from app.llm_settings_store import resolve_config
+
+        if not effective_config or not resolve_config(effective_config).get("api_key"):
+            return JSONResponse(
+                {
+                    "error": "llm_not_configured",
+                    "message": "证据补充需要你的 AI API，请先到设置页保存连接。",
+                },
+                status_code=422,
+            )
+
+        job_id = uuid.uuid4().hex
+        job = Task(
+            id=job_id,
+            title=f"补充证据：{target.title}",
+            input_text=req.instruction.strip() or "核验并补充当前报告的证据缺口",
+            analysis_type=target.analysis_type,
+            status="queued",
+            phase="inspect",
+            progress_pct=0,
+            mode="llm",
+            input_mode="freeform",
+            requested_engine="llm",
+            llm_config=effective_config,
+            material_ids=req.material_ids,
+            web=bool(req.web or req.source_urls),
+            source_urls=req.source_urls or None,
+            owner_id=target.owner_id,
+            project_id=target.project_id,
+            operation="enrichment",
+            target_task_id=target.id,
+            base_version_id=current.id,
+        )
+        db.add(job)
+        db.commit()
+        return {
+            "job_task_id": job_id,
+            "target_task_id": target.id,
+            "base_version_id": current.id,
+            "status": "queued",
+        }
 
 
 @router.post("/api/reports/{task_id}/revise")
@@ -179,17 +298,25 @@ def revise_report(task_id: str, req: ReviseRequest):
         prev_md = current.content_markdown
         title = t.title
         analysis_type = t.analysis_type
-        max_no = (
-            db.query(ReportVersion.version_no)
-            .filter(ReportVersion.task_id == task_id)
-            .order_by(ReportVersion.version_no.desc())
-            .first()
+        task_llm_config = t.llm_config
+
+    effective_llm_config = req.llm_config or task_llm_config
+    from app.llm_settings_store import resolve_config
+
+    if not effective_llm_config or not effective_llm_config.get("profile_id"):
+        return JSONResponse(
+            {"error": "llm_not_configured", "message": "请先在设置中配置你自己的 AI API 连接。"},
+            status_code=422,
         )
-        next_no = (max_no[0] if max_no and max_no[0] else 0) + 1
+    if not resolve_config(effective_llm_config).get("api_key"):
+        return JSONResponse(
+            {"error": "llm_not_configured", "message": "当前浏览器的 AI API 连接不可用，请重新配置。"},
+            status_code=422,
+        )
 
     try:
         gen = ReportGenerator(
-            None, analysis_type=analysis_type, mode="llm", llm_config=req.llm_config
+            None, analysis_type=analysis_type, mode="llm", llm_config=effective_llm_config
         )
         new_md = gen.revise(prev_md, req.instruction, title)
     except ValueError as e:
@@ -198,10 +325,28 @@ def revise_report(task_id: str, req: ReviseRequest):
         logger.exception("AI 再改失败 task=%s", task_id)
         return {"error": "revise_failed", "message": f"AI 再改失败：{e}"}
 
-    # 即时重渲产物到 {task_id}_v{n}/（失败不阻塞版本保存：产物可稍后回滚/手动重渲）
+    with SessionLocal() as db:
+        t = db.get(Task, task_id)
+        if t is None:
+            return {"error": "task_gone", "message": "任务已不存在"}
+        v = create_report_version(
+            db,
+            task_id=task_id,
+            content_markdown=new_md,
+            content_html=None,
+            note=req.instruction,
+            edited_by="ai",
+            editor="系统",
+            summary=req.instruction,
+        )
+        version_id = v.id
+        version_no = v.version_no
+        version_created_at = v.created_at
+
+    # 即时重渲产物到实际分配的版本目录（失败不阻塞版本保存）。
     render_warning: str | None = None
     try:
-        exp = gen.export(new_md, title, settings.generated_dir, slug=f"{task_id}_v{next_no}")
+        exp = gen.export(new_md, title, settings.generated_dir, slug=f"{task_id}_v{version_no}")
     except Exception as e:  # noqa: BLE001
         logger.warning("revise 重渲失败（版本仍保存）task=%s：%s", task_id, e)
         render_warning = f"重渲失败：{e}"
@@ -210,44 +355,30 @@ def revise_report(task_id: str, req: ReviseRequest):
         t = db.get(Task, task_id)
         if t is None:
             return {"error": "task_gone", "message": "任务已不存在"}
-        db.query(ReportVersion).filter(ReportVersion.task_id == task_id).update(
-            {ReportVersion.is_current: 0}
-        )
-        v = ReportVersion(
-            task_id=task_id,
-            kind="revised",
-            version_no=next_no,
-            edited_by="ai",
-            summary=req.instruction,
-            content_markdown=new_md,
-            note=req.instruction,
-            editor="系统",
-            is_current=1,
-        )
-        db.add(v)
-        db.commit()
-        db.refresh(v)
-        # Task.result 更新为最新产物，下载端点（无 version 参数）即可取当前版
-        safe = {k: val for k, val in (t.result or {}).items() if k != "folder"}
-        safe.update(
-            {
-                "markdown": new_md,
-                "title": title,
-                "word": exp.get("word"),
-                "pdf": exp.get("pdf"),
-                "pdf_available": exp.get("pdf_available", False),
-            }
-        )
-        t.result = safe
-        db.commit()
-        vid = v.id
+        current = _current_version(db, task_id)
+        if current is not None and current.id == version_id:
+            # 只有仍为当前版本时才更新默认下载产物，避免较慢的并发渲染覆盖新版本。
+            safe = {k: val for k, val in (t.result or {}).items() if k != "folder"}
+            safe.update(
+                {
+                    "markdown": new_md,
+                    "title": title,
+                    "word": exp.get("word"),
+                    "pdf": exp.get("pdf"),
+                    "pdf_available": exp.get("pdf_available", False),
+                    "research": current.research_snapshot,
+                    "research_status": current.research_status or "unavailable",
+                }
+            )
+            t.result = safe
+            db.commit()
     resp = {
-        "id": vid,
-        "version_no": next_no,
+        "id": version_id,
+        "version_no": version_no,
         "kind": "revised",
         "edited_by": "ai",
         "summary": req.instruction,
-        "created_at": v.created_at.isoformat() if v.created_at else None,
+        "created_at": version_created_at.isoformat() if version_created_at else None,
         "is_current": True,
         "word": f"/api/download/{task_id}?kind=word" if exp.get("word") else None,
         "pdf_available": exp.get("pdf_available", False),
@@ -288,14 +419,10 @@ def rollback_version(vid: str):
         exp = {"word": None, "pdf": None, "pdf_available": False}
 
     with SessionLocal() as db:
-        v = db.get(ReportVersion, vid)
+        v = set_current_version(db, vid)
         if not v:
             return {"error": "version_not_found", "message": "版本不存在"}
         t = db.get(Task, task_id)
-        db.query(ReportVersion).filter(ReportVersion.task_id == task_id).update(
-            {ReportVersion.is_current: 0}
-        )
-        v.is_current = 1
         safe = {k: val for k, val in (t.result or {}).items() if k != "folder"}
         safe.update(
             {
@@ -304,6 +431,8 @@ def rollback_version(vid: str):
                 "word": exp.get("word"),
                 "pdf": exp.get("pdf"),
                 "pdf_available": exp.get("pdf_available", False),
+                "research": v.research_snapshot,
+                "research_status": v.research_status or "unavailable",
             }
         )
         t.result = safe
@@ -346,6 +475,8 @@ def get_report_version(task_id: str, vid: str):
             "is_current": bool(v.is_current),
             "content_markdown": v.content_markdown,
             "content_html": v.content_html,
+            "research_status": v.research_status or "unavailable",
+            "research": v.research_snapshot,
         }
 
 

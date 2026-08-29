@@ -21,7 +21,9 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import Callable
 
 logger = logging.getLogger("search")
 
@@ -75,8 +77,33 @@ def _safe_msg(e: Exception) -> str:
     return msg[:200]
 
 
+def _assert_safe_url(url: str) -> None:
+    """URL 白名单护栏：只允许 http/https，拒绝 file:// 等本地协议及本机回环地址，
+    防止用户白名单/搜索结果被利用读取本地文件或探测本机服务（SSRF）。"""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        raise ValueError(f"无法解析的 URL: {url[:80]}")
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"不允许的 URL 协议: {scheme or '(空)'}")
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError(f"URL 缺少主机名: {url[:80]}")
+    if host.lower() == "localhost":
+        raise ValueError("不允许访问本机回环地址")
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return  # 非 IP 字面量（域名），交给正常 HTTP 解析
+    if not ip.is_global:
+        raise ValueError("不允许访问本机、私有或链路本地地址")
+
+
 def _http_get(url: str, timeout: int = FETCH_TIMEOUT, headers: dict | None = None) -> str:
     """GET 一个 URL 返回文本。优先 requests（若已安装），否则 urllib 兜底。"""
+    _assert_safe_url(url)
     hdrs = {"User-Agent": BROWSER_UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
     if headers:
         hdrs.update(headers)
@@ -149,6 +176,64 @@ def _search_duckduckgo(query: str, max_results: int) -> list[SearchHit]:
             if attempt == 0:
                 time.sleep(1.0)
     raise last_exc  # type: ignore[misc]
+
+
+def _search_bing_html(query: str, max_results: int) -> list[SearchHit]:
+    """零 key 兜底：GET https://www.bing.com/search?q={query}（UA=浏览器），lxml 解析 b_algo。
+
+    必应网页版对自动化请求偶发验证码/限流，因此只作为免费轮换源之一，
+    不重试（失败即交给下一个源），超时缩短到 6s 以控制总耗时。
+    """
+    url = "https://www.bing.com/search?" + urllib.parse.urlencode(
+        {"q": query, "count": "10", "setlang": "zh-hans"}
+    )
+    html = _http_get(url, timeout=6)
+    from lxml import html as lh
+
+    tree = lh.fromstring(html)
+    hits: list[SearchHit] = []
+    for li in tree.cssselect("li.b_algo")[:max_results]:
+        a = li.cssselect("h2 a")
+        if not a:
+            continue
+        title = "".join(a[0].itertext()).strip()
+        url = (a[0].get("href") or "").strip()
+        if not url:
+            continue
+        snippet = ""
+        p = li.cssselect(".b_caption p") or li.cssselect(
+            ".b_lineclamp2, .b_lineclamp3, .b_lineclamp4"
+        )
+        if p:
+            snippet = "".join(p[0].itertext()).strip()
+        hits.append(SearchHit(title=title or url, url=url, snippet=snippet))
+    return hits
+
+
+def _search_sogou(query: str, max_results: int) -> list[SearchHit]:
+    """零 key 兜底：GET https://www.sogou.com/web?query={query}（UA=浏览器），lxml 解析 vrwrap。"""
+    url = "https://www.sogou.com/web?" + urllib.parse.urlencode({"query": query})
+    html = _http_get(url, timeout=6)
+    from lxml import html as lh
+
+    tree = lh.fromstring(html)
+    hits: list[SearchHit] = []
+    for node in tree.cssselect(".vrwrap")[:max_results]:
+        a = node.cssselect("h3 a") or node.cssselect("h4 a")
+        if not a:
+            continue
+        title = "".join(a[0].itertext()).strip()
+        url = (a[0].get("href") or "").strip()
+        if not url:
+            continue
+        snippet = ""
+        s = node.cssselect(".text-layout") or node.cssselect(
+            ".str_info"
+        ) or node.cssselect(".fz-mid")
+        if s:
+            snippet = "".join(s[0].itertext()).strip()
+        hits.append(SearchHit(title=title or url, url=url, snippet=snippet))
+    return hits
 
 
 def _search_bing(query: str, api_key: str, max_results: int) -> list[SearchHit]:
@@ -319,12 +404,63 @@ def search_web(
     if provider == "duckduckgo":
         return _wrap("duckduckgo", lambda: _search_duckduckgo(query, max_results))
 
-    # —— auto 自动选择：BING → BRAVE → DDG（零 Key 恒可执行）——
+    # —— auto 自动选择：BING → BRAVE → 免费零 key 源轮换（DDG → 必应网页版 → 搜狗）——
     if settings.bing_search_key:
         return _wrap("bing", lambda: _search_bing(query, settings.bing_search_key, max_results))
     if settings.brave_search_key:
         return _wrap("brave", lambda: _search_brave(query, settings.brave_search_key, max_results))
-    return _wrap("duckduckgo", lambda: _search_duckduckgo(query, max_results))
+    # 免费源依次尝试：任一返回结果即停；全部失败返回统一降级消息，
+    # 避免单个免费源（如 DDG）不可用时把整个搜索链路打瘫。
+    last_result: SearchResult | None = None
+    for method, fn in (
+        ("duckduckgo", lambda: _search_duckduckgo(query, max_results)),
+        ("bing_html", lambda: _search_bing_html(query, max_results)),
+        ("sogou", lambda: _search_sogou(query, max_results)),
+    ):
+        result = _wrap(method, fn)
+        if result.hits:
+            return result
+        last_result = result
+    detail = f"：{last_result.degraded}" if last_result and last_result.degraded else ""
+    return SearchResult(
+        query=query,
+        hits=[],
+        provider="free",
+        degraded=f"所有免费检索源均不可用（DuckDuckGo/必应网页版/搜狗）{detail}",
+    )
+
+
+def search_primary_and_analogue(
+    primary_query: str,
+    analogue_query: str,
+    max_results: int = 5,
+    *,
+    search_fn: Callable[[str, int], SearchResult | None] | None = None,
+    parallel: bool | None = None,
+) -> tuple[SearchResult | None, SearchResult | None]:
+    """Search the current event and historical analogues without doubling failure latency.
+
+    Configured commercial providers are queried in parallel. The keyless DuckDuckGo
+    fallback first checks the primary query because two consecutive timeout/retry
+    cycles otherwise add no evidence and can delay one report by tens of seconds.
+    Tests and callers may explicitly select either path with ``parallel``.
+    """
+    from app.settings import settings
+
+    fn = search_fn or search_web
+    if parallel is None:
+        parallel = bool(settings.bing_search_key or settings.brave_search_key)
+
+    if parallel:
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="triad-search") as pool:
+            primary_future = pool.submit(fn, primary_query, max_results)
+            analogue_future = pool.submit(fn, analogue_query, max_results)
+            return primary_future.result(), analogue_future.result()
+
+    primary = fn(primary_query, max_results)
+    if primary is None or (not primary.hits and primary.degraded):
+        return primary, None
+    return primary, fn(analogue_query, max_results)
 
 
 # ============================ 抓取 / 清洗 ============================
@@ -386,24 +522,41 @@ def clean_text(html: str, url: str = "") -> str:
     return _strip_tags(html)
 
 
-def fetch_and_clean(urls: list[str], max_chars: int = 8000) -> list[dict]:
-    """逐个抓取公开网页正文（requests + trafilatura 抽主文，失败降级）。
+def fetch_and_clean(
+    urls: list[str],
+    max_chars: int = 8000,
+    max_workers: int = 4,
+) -> list[dict]:
+    """并发抓取公开网页正文，按输入 URL 顺序返回，失败条目原位保留。
 
     返回 [{title, url, text, snippet}]；text 截断 max_chars。
     抓取失败条目保留 {title, url, text:"", error} 供前端/附录过滤，不静默丢弃。
     """
-    out: list[dict] = []
-    for u in urls or []:
+    def _fetch_one(u: str) -> dict:
         entry: dict = {"title": "", "url": u, "text": "", "snippet": "", "error": None}
         try:
             html = _http_get(u)
-            entry["text"] = clean_text(html, u)[:max_chars]
-            entry["title"] = _extract_title(html) or u
+            title = _extract_title(html) or u
+            text = clean_text(html, u).strip()
+            # 只有页面标题、空白页或拦截页不能作为证据。保留失败条目供
+            # 前端显示，但绝不让它进入 materials.sources 或 LLM 证据池。
+            if len(text) < 40 or text == title.strip():
+                entry["title"] = title
+                entry["error"] = "empty_content"
+                return entry
+            entry["text"] = text[:max_chars]
+            entry["title"] = title
         except Exception as e:  # noqa: BLE001
             entry["error"] = _safe_msg(e)
             logger.warning("抓取失败 %s：%s", u, entry["error"])
-        out.append(entry)
-    return out
+        return entry
+
+    ordered_urls = list(urls or [])
+    if not ordered_urls:
+        return []
+    worker_count = max(1, min(max_workers, len(ordered_urls)))
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="triad-fetch") as pool:
+        return list(pool.map(_fetch_one, ordered_urls))
 
 
 # ============================ 去重 ============================
@@ -471,3 +624,13 @@ def derive_query(input_text: str) -> str:
         return m.group(0)
     first_line = text.splitlines()[0].strip() if text else ""
     return first_line or text[:80]
+
+
+def derive_analogue_query(input_text: str) -> str:
+    """Build a bounded second query for historical handling and outcomes."""
+    base = re.sub(r"https?://\S+", " ", (input_text or "")).strip()
+    base = re.sub(r"\s+", " ", base)
+    if not base:
+        base = derive_query(input_text)
+    suffix = " 类似案例 历史处置 处理结果"
+    return (base[: 180 - len(suffix)] + suffix).strip()

@@ -3,13 +3,18 @@
 不依赖外网：DDG 解析用内嵌 HTML 夹具；降级用「显式 provider 但缺 Key」触发；
 真网检索只做可选冒烟（跳过不失败）。
 """
+import time
+
 from app.search import (
     SearchHit,
     SearchResult,
     _normalize_url,
     _parse_ddg_html,
     dedupe_hits,
+    derive_analogue_query,
+    fetch_and_clean,
     format_search_context,
+    search_primary_and_analogue,
     search_web,
 )
 
@@ -127,3 +132,114 @@ def test_format_search_context_hits_and_degraded():
     assert "检索源不可用" in ctx2  # 降级必须显式可见
 
     assert format_search_context(None) == ""
+
+
+def test_analogue_query_is_bounded_and_explicitly_asks_for_outcomes():
+    query = derive_analogue_query("分析某平台修改规则后引发用户抵制，官方随后发布回应" * 20)
+
+    assert len(query) <= 180
+    assert "类似案例" in query
+    assert "处理结果" in query
+
+
+def test_primary_search_failure_skips_redundant_analogue_search():
+    calls: list[str] = []
+
+    def fake_search(query: str, max_results: int):
+        calls.append(query)
+        return SearchResult(
+            query=query,
+            hits=[],
+            provider="duckduckgo",
+            degraded="检索源超时",
+        )
+
+    primary, analogue = search_primary_and_analogue(
+        "主查询",
+        "历史对照查询",
+        5,
+        search_fn=fake_search,
+        parallel=False,
+    )
+
+    assert primary.degraded
+    assert analogue is None
+    assert calls == ["主查询"]
+
+
+def test_fetch_and_clean_runs_concurrently_and_preserves_input_order(monkeypatch):
+    delays = {
+        "https://example.com/slow": 0.12,
+        "https://example.com/fast": 0.02,
+        "https://example.com/middle": 0.07,
+    }
+
+    def fake_get(url: str, timeout: int = 12, headers=None):
+        time.sleep(delays[url])
+        return f"<html><title>{url}</title><body>这是足够长的正文内容 {url}</body></html>"
+
+    monkeypatch.setattr("app.search._http_get", fake_get)
+    monkeypatch.setattr("app.search.clean_text", lambda html, url="": html)
+    urls = list(delays)
+    started = time.monotonic()
+    rows = fetch_and_clean(urls, max_workers=3)
+    elapsed = time.monotonic() - started
+
+    assert [row["url"] for row in rows] == urls
+    assert elapsed < 0.19
+
+
+def test_fetch_and_clean_marks_empty_pages_as_unusable(monkeypatch):
+    monkeypatch.setattr(
+        "app.search._http_get",
+        lambda url, timeout=12, headers=None: "<html><title>只有标题</title><body></body></html>",
+    )
+    rows = fetch_and_clean(["https://example.com/empty"])
+
+    assert rows[0]["text"] == ""
+    assert rows[0]["error"] == "empty_content"
+
+
+def test_search_web_rotates_to_next_free_source_when_ddg_fails(monkeypatch):
+    """免费源轮换：DDG 挂了自动轮到必应网页版，拿到结果即停。"""
+    import app.search as search
+    from app.settings import settings as search_settings
+
+    monkeypatch.setattr(search_settings, "bing_search_key", "")
+    monkeypatch.setattr(search_settings, "brave_search_key", "")
+
+    def failing_ddg(query, max_results):
+        raise TimeoutError("ddg timeout")
+
+    hit = search.SearchHit(
+        title="必应结果", url="https://example.com/bing", snippet="snippet"
+    )
+    monkeypatch.setattr(search, "_search_duckduckgo", failing_ddg)
+    monkeypatch.setattr(search, "_search_bing_html", lambda query, max_results: [hit])
+
+    r = search.search_web("三元结构理论")
+    assert r is not None
+    assert r.hits and r.hits[0].url == "https://example.com/bing"
+    assert r.provider == "bing_html"
+    assert not r.degraded
+
+
+def test_search_web_all_free_sources_fail_degrades(monkeypatch):
+    """全部免费源失败：返回 degraded 标记，不静默、不抛异常。"""
+    import app.search as search
+    from app.settings import settings as search_settings
+
+    monkeypatch.setattr(search_settings, "bing_search_key", "")
+    monkeypatch.setattr(search_settings, "brave_search_key", "")
+
+    def failing(*args, **kwargs):
+        raise TimeoutError("timeout")
+
+    monkeypatch.setattr(search, "_search_duckduckgo", failing)
+    monkeypatch.setattr(search, "_search_bing_html", failing)
+    monkeypatch.setattr(search, "_search_sogou", failing)
+
+    r = search.search_web("三元结构理论")
+    assert r is not None
+    assert not r.hits
+    assert r.degraded and "免费检索源" in r.degraded

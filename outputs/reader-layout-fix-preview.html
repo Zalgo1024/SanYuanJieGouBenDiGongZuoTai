@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>拥挤与穿模修复预览</title>
+<style>
+  :root{
+    --canvas: oklch(0.975 0.004 250);
+    --surface: oklch(0.995 0.002 250);
+    --surface-muted: oklch(0.955 0.008 250);
+    --ink: oklch(0.22 0.025 255);
+    --ink-muted: oklch(0.48 0.02 255);
+    --line: oklch(0.88 0.012 250);
+    --accent: oklch(0.48 0.13 245);
+    --accent-soft: oklch(0.94 0.035 245);
+    --shadow: 0 10px 30px rgb(25 42 65 / 0.06);
+  }
+  body{ margin:0; background:var(--canvas); color:var(--ink); font-family:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+
+  .demo{ max-width:1120px; margin:32px auto; padding:0 24px; }
+  .demo h2{ margin:0 0 18px; font-size:18px; }
+
+  /* === 修复1：research-reliability 卡片化 === */
+  .research-ledger{ border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--surface); margin-top:24px; }
+  .research-ledger > header{ display:flex; align-items:flex-end; justify-content:space-between; gap:24px; padding:20px 22px 16px; }
+  .research-ledger > header h2{ margin:5px 0 0; font-size:18px; }
+  .research-ledger__metrics{ display:flex; gap:22px; color:var(--ink-muted); font-size:10px; }
+  .research-ledger__metrics span{ display:grid; gap:2px; }
+  .research-ledger__metrics strong{ color:var(--ink); font-size:16px; }
+
+  .research-reliability{ display:grid; grid-template-columns:1fr; gap:18px; border-top:1px solid var(--line); padding:22px 24px; }
+  .research-reliability h3{ margin:4px 0 6px; font-size:16px; }
+  .research-reliability p{ margin:0; color:var(--ink-muted); font-size:12px; line-height:1.65; }
+  .research-reliability dl{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; margin:0; }
+  .research-reliability dl > div{ min-width:0; border:1px solid var(--line); border-radius:8px; background:var(--surface); padding:14px; }
+  .research-reliability dt{ color:var(--ink-muted); font-size:11px; line-height:1.4; }
+  .research-reliability dd{ margin:10px 0 6px; color:var(--ink); font-size:20px; font-weight:700; }
+  .research-reliability dl small{ display:block; color:var(--ink-muted); font-size:10px; line-height:1.45; }
+
+  /* === 修复2：目录不再穿模 === */
+  .report-reader__layout{ display:grid; grid-template-columns:165px minmax(0, 1fr) 220px; gap:26px; padding-top:28px; }
+  .report-outline{
+    align-self:start;
+    display:grid; gap:3px;
+    position:sticky; top:18px;
+    min-width:0;
+    max-height:calc(100vh - 36px);
+    overflow:hidden auto;
+    border:1px solid var(--line); border-radius:8px;
+    background:var(--surface);
+    padding:17px 10px;
+    box-shadow:var(--shadow);
+  }
+  .report-outline > .eyebrow{ padding:0 8px 9px; font-size:11px; color:var(--ink-muted); letter-spacing:.08em; text-transform:uppercase; }
+  .report-outline a{
+    position:relative;
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    border-left:1px solid var(--line);
+    color:var(--ink-muted);
+    padding:8px 10px;
+    font-size:12px;
+    text-decoration:none;
+  }
+  .report-outline a[aria-current="location"]{ border-left-color:var(--accent); background:var(--accent-soft); color:var(--accent); }
+  .report-document{ max-width:720px; min-width:0; border:1px dashed var(--line); background:var(--surface); padding:24px; }
+  .report-document h3{ margin:0 0 12px; }
+  .report-document p{ margin:0; color:var(--ink-muted); line-height:1.7; }
+
+  @media (max-width:980px){
+    .research-reliability dl{ grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .report-reader__layout{ grid-template-columns:150px minmax(0, 1fr); }
+  }
+  @media (max-width:660px){
+    .research-reliability dl{ grid-template-columns:1fr; }
+    .research-reliability dl > div{ border:1px solid var(--line); padding:12px; }
+    .report-reader__layout{ grid-template-columns:minmax(0, 1fr); }
+    .report-outline{ position:static; max-height:none; overflow-x:auto; overflow-y:visible; }
+  }
+</style>
+</head>
+<body>
+<div class="demo">
+  <h2>修复 1：关键判断与证据 · 指标卡片化</h2>
+  <section class="research-ledger">
+    <header>
+      <div>
+        <span style="font-size:11px; color:var(--accent); letter-spacing:.08em; text-transform:uppercase;">研究核验</span>
+        <h2>关键判断与证据</h2>
+      </div>
+      <div class="research-ledger__metrics">
+        <span><strong>8</strong> 个关键判断</span>
+        <span><strong>0</strong> 项冲突</span>
+        <span><strong>3</strong> 项缺口</span>
+      </div>
+    </header>
+    <section class="research-reliability">
+      <div>
+        <span style="font-size:11px; color:var(--ink-muted); letter-spacing:.08em; text-transform:uppercase;">可解释质量评估</span>
+        <h3>资料与分析可靠性</h3>
+        <p>各指标分别反映证据条件，不合成为无法解释的总分。</p>
+      </div>
+      <dl>
+        <div><dt>关键结论证据覆盖</dt><dd>100%</dd><small>8 个关键判断</small></div>
+        <div><dt>事实引用率</dt><dd>100%</dd><small>事实是否绑定直接来源</small></div>
+        <div><dt>关系证据覆盖</dt><dd>100%</dd><small>图谱关系是否可追溯</small></div>
+        <div><dt>来源独立性</dt><dd>100%</dd><small>4 组独立来源</small></div>
+        <div><dt>时间完整度</dt><dd>100%</dd><small>关键事实是否具备时间锚点</small></div>
+        <div><dt>高质量来源</dt><dd>0</dd><small>A/B 级来源</small></div>
+        <div><dt>重复来源</dt><dd>0</dd><small>转载折叠，不重复计数</small></div>
+        <div><dt>未证实推断</dt><dd>0</dd><small>0 项信息冲突</small></div>
+      </dl>
+    </section>
+  </section>
+
+  <h2 style="margin-top:48px;">修复 2：左侧目录不再穿模</h2>
+  <div class="report-reader__layout">
+    <aside class="report-outline" aria-label="报告目录">
+      <span class="eyebrow">目录</span>
+      <a href="#">03 分析框架说明</a>
+      <a href="#">04 情况概述</a>
+      <a href="#">05 分析框架说明</a>
+      <a href="#">06 核心冲突点</a>
+      <a href="#">07 事件与时间线</a>
+      <a href="#">08 利益主体识别</a>
+      <a href="#" aria-current="location">09 利益动线与转化</a>
+      <a href="#">10 关系图谱</a>
+    </aside>
+    <div class="report-document">
+      <h3>证据与来源</h3>
+      <p>正文区域。之前目录里的长标题会溢出到这块蓝色背景上；现在目录加了 min-width:0、overflow:hidden auto，链接加了 text-overflow:ellipsis / white-space:nowrap，长标题会被截断显示省略号，不再覆盖正文。</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

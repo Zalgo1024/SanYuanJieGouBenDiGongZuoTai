@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Check, FileText, RefreshCw } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowRight, Check, FileText, RefreshCw, Trash2 } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { analysisTypes, phaseLabels } from "@/lib/domain";
 import { useAppStore } from "@/lib/store";
 import { useTaskProgress } from "@/lib/realtime";
+import { deleteReport } from "@/lib/workspace-api";
 import { AnalysisNetwork } from "@/components/analysis-network";
 import { TaskReportPreview } from "@/components/task-report-preview";
 
@@ -13,7 +15,10 @@ type View = "overview" | "report" | "network";
 
 export function TaskWorkbench({ taskId }: { taskId: string }) {
   const [view, setView] = useState<View>("overview");
-  const { state, hydrated, connection, loadTask, loadReport } = useAppStore();
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const router = useRouter();
+  const { state, hydrated, connection, loadTask, loadReport, deleteReports } = useAppStore();
   const task = state.tasks.find((item) => item.id === taskId);
 
   useTaskProgress(taskId, connection !== "demo");
@@ -23,6 +28,24 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
       void loadTask(taskId);
     }
   }, [connection, hydrated, loadTask, task, taskId]);
+
+  async function handleDelete() {
+    const confirmed = window.confirm(
+      "确定要永久删除这个案例吗？关联的报告、版本和生成文件都会被清除，且无法恢复。",
+    );
+    if (!confirmed) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await deleteReport(taskId);
+      deleteReports([taskId]);
+      router.push("/dashboard");
+    } catch (reason) {
+      setDeleteError(reason instanceof Error ? reason.message : "删除失败，请稍后重试");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   if (!task) {
     if (!hydrated || connection === "checking") {
@@ -49,7 +72,7 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
         <p>返回新建分析，或从项目工作台选择后端仍然保留的任务。</p>
         <div>
           <Link className="primary-button" href="/analysis">新建分析</Link>
-          <Link className="secondary-button" href="/projects">查看项目</Link>
+          <Link className="secondary-button" href="/dashboard">返回工作台</Link>
         </div>
       </section>
     );
@@ -61,10 +84,15 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
   const linkedReport = state.reports.find((report) => report.taskId === task.id);
   const linkedMaterials = state.materials.filter((material) => task.materialIds.includes(material.id));
   const running = task.status === "queued" || task.status === "generating";
+  const errorPhaseLabel = task.errorPhase === "quality_gate"
+    ? "报告质量校验"
+    : task.errorPhase === "input_validation"
+      ? "输入校验"
+      : phaseLabels.find((phase) => phase.id === task.errorPhase)?.label;
   const statusText = task.status === "done"
     ? linkedReport ? "任务已完成，后端当前报告版本已同步。" : "任务已完成，正在同步后端当前报告版本。"
     : task.status === "error"
-      ? "后端任务执行失败。请检查输入材料或后端日志后重新发起分析。"
+      ? `后端在${errorPhaseLabel ?? currentPhase?.label ?? "当前步骤"}失败。${task.error || "请检查输入材料后重新发起分析。"}`
       : "后端正在执行分析。此处只显示任务实际返回的阶段与进度。";
 
   return (
@@ -75,9 +103,25 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
           <h1>{task.title}</h1>
           <p>{task.context || "该任务未填写补充背景，分析范围以后端收到的题目和素材为准。"}</p>
         </div>
-        <span className={`status-pill status-pill--${task.status === "done" ? "verified" : task.status === "error" ? "warning" : "running"}`}>
-          <span />{currentPhase?.label ?? "等待后端"}
-        </span>
+        <div className="task-workbench__actions">
+          <span className={`status-pill status-pill--${task.status === "done" ? "verified" : task.status === "error" ? "warning" : "running"}`}>
+            <span />{currentPhase?.label ?? "等待后端"}
+          </span>
+          <button
+            type="button"
+            className="danger-button"
+            onClick={() => void handleDelete()}
+            disabled={deleting}
+            aria-label="删除这个案例"
+          >
+            <Trash2 size={15} />{deleting ? "删除中…" : "删除案例"}
+          </button>
+          {deleteError && (
+            <span className="form-error task-workbench__delete-error" role="alert">
+              {deleteError}
+            </span>
+          )}
+        </div>
       </header>
 
       <div className="workbench-tabs" role="tablist" aria-label="分析任务视图">
@@ -107,6 +151,20 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
             <span className="eyebrow">后端任务状态</span>
             <h2>{currentPhase?.label ?? "等待后端响应"}</h2>
             <p>{statusText}</p>
+            {task.status === "error" && task.error && <p className="task-error-detail" role="alert">错误详情：{task.error}</p>}
+            {task.quality && (
+              <section className="quality-result" aria-label="报告质量校验结果">
+                <div><strong>报告质量校验</strong><span>{task.quality.issues.filter((issue) => issue.severity === "error").length} 项错误 · {task.quality.issues.filter((issue) => issue.severity === "warning").length} 项警告</span></div>
+                {task.quality.issues.length > 0 && (
+                  <ul>{task.quality.issues.map((issue) => (
+                    <li key={`${issue.code}-${issue.section ?? "report"}`}>
+                      <strong>{issue.section ?? "全文"}</strong>
+                      <span>{issue.message}</span>
+                    </li>
+                  ))}</ul>
+                )}
+              </section>
+            )}
             <div>
               <span>任务状态：{task.status}</span>
               <span>分析素材：{task.materialIds.length} 项</span>
@@ -144,7 +202,7 @@ export function TaskWorkbench({ taskId }: { taskId: string }) {
           </div>
         )
       )}
-      {view === "network" && <AnalysisNetwork taskId={task.id} markdown={linkedReport?.markdown} materials={linkedMaterials} />}
+      {view === "network" && <AnalysisNetwork taskId={task.id} markdown={linkedReport?.markdown} materials={linkedMaterials} research={linkedReport?.research} researchStatus={linkedReport?.researchStatus} />}
     </section>
   );
 }

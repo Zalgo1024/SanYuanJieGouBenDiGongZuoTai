@@ -16,7 +16,8 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from app.db import SessionLocal
-from app.models import ReportVersion, Task
+from app.models import Task
+from app.report_version_service import ensure_original_version
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -164,17 +165,11 @@ def import_case(case_id: str):
             },
         )
         db.add(t)
-        db.flush()
-        v = ReportVersion(
-            task_id=task_id,
-            kind="original",
-            version_no=1,
-            edited_by="ai",
-            summary="案例库导入（自动生成）",
-            content_markdown=case["markdown"],
-            editor="系统",
-            is_current=1,
-        )
-        db.add(v)
         db.commit()
+        ensure_original_version(
+            db,
+            t,
+            summary="案例库导入（自动生成）",
+            note="案例库导入原始稿",
+        )
     return {"task_id": task_id}

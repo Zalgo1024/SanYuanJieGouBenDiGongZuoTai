@@ -97,21 +97,43 @@ export function buildGraphOptions(diagram: DiagramDocument): Options {
   };
 }
 
-function graphData(diagram: DiagramDocument) {
-  const nodes = new DataSet<Node>(diagram.nodes.map((node) => {
+function escapeTooltipText(value: unknown): string {
+  // vis-network 的 tooltip (title) 以 innerHTML 渲染，必须转义，防注入
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export function buildGraphData(diagram: DiagramDocument): { nodes: Node[]; edges: Edge[] } {
+  const nodes: Node[] = diagram.nodes.map((node) => {
     const color = nodeColors[node.type] ?? nodeColors.actor;
-    return { id: node.id, label: node.label, title: `${node.label}\n类型：${node.type}`, shape: nodeShapes[node.type] ?? "box", color: { ...color, highlight: { background: "#ffffff", border: color.border }, hover: { background: "#ffffff", border: color.border } } };
-  }));
-  const edges = new DataSet<Edge>(diagram.edges.map((edge) => ({
-    id: edge.id,
-    from: edge.source,
-    to: edge.target,
-    label: edge.label,
-    title: `${edge.label}\n类型：${edge.type}`,
-    color: { color: edgeColors[edge.type] ?? edgeColors.unknown, highlight: edgeColors[edge.type] ?? edgeColors.unknown, hover: edgeColors[edge.type] ?? edgeColors.unknown },
-    dashes: edgeDashes[edge.type] ?? edgeDashes.unknown,
-  })));
+    const weight = Math.max(0, Math.min(1, node.weight ?? 0.5));
+    return { id: node.id, label: node.label, value: Math.round(10 + weight * 20), mass: 1 + weight * 2, title: `${escapeTooltipText(node.label)}\n类型：${escapeTooltipText(node.type)}\n权重：${Math.round(weight * 100)}%`, shape: nodeShapes[node.type] ?? "box", color: { ...color, highlight: { background: "#ffffff", border: color.border }, hover: { background: "#ffffff", border: color.border } } };
+  });
+  const edges: Edge[] = diagram.edges.map((edge) => {
+    const strength = Math.max(1, Math.min(5, edge.strength ?? 1));
+    const baseColor = edge.polarity === "negative" ? "#b34f43" : edge.polarity === "positive" ? "#258764" : edgeColors[edge.type] ?? edgeColors.unknown;
+    const arrows = edge.direction === "undirected"
+      ? { from: { enabled: false }, to: { enabled: false } }
+      : edge.direction === "mutual"
+        ? { from: { enabled: true }, to: { enabled: true } }
+        : { from: { enabled: false }, to: { enabled: true } };
+    return {
+      id: edge.id,
+      from: edge.source,
+      to: edge.target,
+      label: edge.label,
+      width: 1 + strength * 0.65,
+      arrows,
+      title: `${escapeTooltipText(edge.label)}\n类型：${escapeTooltipText(edge.type)}\n强度：${strength}/5\n状态：${escapeTooltipText(edge.relationStatus ?? "未知")}`,
+      color: { color: baseColor, highlight: baseColor, hover: baseColor },
+      dashes: edge.relationStatus === "inferred" ? [7, 5] : edgeDashes[edge.type] ?? edgeDashes.unknown,
+    };
+  });
   return { nodes, edges };
+}
+
+function graphData(diagram: DiagramDocument) {
+  const data = buildGraphData(diagram);
+  return { nodes: new DataSet<Node>(data.nodes), edges: new DataSet<Edge>(data.edges) };
 }
 
 export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(function GraphCanvas({ diagram, onSelectionChange, onError }, ref) {

@@ -150,7 +150,37 @@ BODY = r"""
 
 ## 五、三元结构分析正文
 
-### （一）规模墙的另一面：为什么一人够不着奖
+### （一）全景：进门易、取水难的利益结构
+
+在逐节拆解前，先看全景：政策发布方用财政资金买规模增量，已规模企业在奖池兑现，一人公司被规模墙挡在奖池外，却平等承担合规义务。一个人注册公司很容易，但每一笔像样的奖励都挂在"先做大"的前提上，这就是"进门易、取水难"的利益结构。
+
+```DIAGRAM
+{"viz": "network", "title": "惠州惠企奖补全景利益关系网络",
+ "nodes": [
+   {"id":"hz", "label":"惠州市工信局 惠城区科工信局", "type":"political"},
+   {"id":"province", "label":"省战略定位考核", "type":"political"},
+   {"id":"policy", "label":"数字产业奖补 18条", "type":"institutional_future"},
+   {"id":"scale", "label":"规模门槛(2000万/1亿)", "type":"material"},
+   {"id":"done", "label":"已规模软件/工业企业", "type":"actor"},
+   {"id":"opc", "label":"一人公司", "type":"actor"},
+   {"id":"solo", "label":"个体创业者/独立开发者", "type":"actor"},
+   {"id":"comply", "label":"合规义务(填报/信用/税务)", "type":"security"},
+   {"id":"bonus", "label":"奖补资金", "type":"material"}
+ ],
+ "edges": [
+   {"source":"province", "target":"hz", "label":"任务驱动", "type":"power"},
+   {"source":"hz", "target":"policy", "label":"制定", "type":"power"},
+   {"source":"policy", "target":"scale", "label":"设计门槛", "type":"legal"},
+   {"source":"scale", "target":"done", "label":"已跨过", "type":"economic"},
+   {"source":"scale", "target":"opc", "label":"够不着", "type":"economic"},
+   {"source":"done", "target":"bonus", "label":"兑现", "type":"economic"},
+   {"source":"opc", "target":"comply", "label":"平等承担", "type":"legal"},
+   {"source":"solo", "target":"opc", "label":"升级通道(剥离涉软)", "type":"economic"},
+   {"source":"opc", "target":"bonus", "label":"激励端缺席", "type":"power"}
+ ]}
+```
+
+### （二）规模墙的另一面：为什么一人够不着奖
 
 数字产业政策的18条里，绝大多数奖励的触发条件是"达到某个规模"。软件企业营收破2000万、破1亿；工业企业小升规（2000万主营业务收入）；上云上平台要求"规模以上"。这些数字不是随意定的。它们对应统计制度里"规模以上企业"的纳统线，是地方政府做产业数据的硬抓手。
 
