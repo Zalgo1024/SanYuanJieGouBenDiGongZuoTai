@@ -211,8 +211,8 @@ def seed_projects() -> None:
             "interests": "12",
             "chapters": "8",
             "progress": "68%",
-            "owner_name": "李政恒",
-            "owner_id": "li",
+            "owner_name": "三元结构分析工作台",
+            "owner_id": "workbench",
         },
         {
             "id": "trademark",
@@ -223,8 +223,8 @@ def seed_projects() -> None:
             "interests": "15",
             "chapters": "8",
             "progress": "100%",
-            "owner_name": "李政恒",
-            "owner_id": "li",
+            "owner_name": "三元结构分析工作台",
+            "owner_id": "workbench",
         },
         {
             "id": "relocation",
@@ -235,8 +235,8 @@ def seed_projects() -> None:
             "interests": "20",
             "chapters": "8",
             "progress": "45%",
-            "owner_name": "李政恒",
-            "owner_id": "li",
+            "owner_name": "三元结构分析工作台",
+            "owner_id": "workbench",
         },
     ]
     with SessionLocal() as db:

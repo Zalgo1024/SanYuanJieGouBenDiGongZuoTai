@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { WS_BASE } from "./api";
+import { wsUrl } from "./api";
 import { useAppStore } from "./store";
 import { normalizeTaskPhase, normalizeTaskStatus } from "./workspace-api";
 
@@ -77,7 +77,7 @@ export function useTaskProgress(taskId: string, enabled = true) {
 
     function connect() {
       if (closedByUs || stopped) return;
-      ws = new WebSocket(`${WS_BASE}/ws/progress/${taskId}`);
+      ws = new WebSocket(wsUrl(`/ws/progress/${taskId}`));
       ws.onmessage = (event: MessageEvent<string>) => {
         try {
           const payload = JSON.parse(event.data) as {

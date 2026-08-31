@@ -17,6 +17,8 @@ interface ProviderPreset {
   label: string;
   baseUrl: string;
   models: string[];
+  /** 官方注册地址/控制台，用于引导访客自行取得 API Key；自定义接口留空。 */
+  signupUrl: string;
 }
 
 /** 全部走 OpenAI 兼容协议；provider 只决定预设地址与常用模型候选。 */
@@ -25,46 +27,55 @@ const PROVIDER_PRESETS: Record<LlmProvider, ProviderPreset> = {
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
     models: ["deepseek-chat", "deepseek-reasoner"],
+    signupUrl: "https://platform.deepseek.com",
   },
   zhipu: {
     label: "智谱 GLM",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     models: ["glm-4.6", "glm-4-air", "glm-4-flash"],
+    signupUrl: "https://open.bigmodel.cn",
   },
   qwen: {
     label: "通义千问",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     models: ["qwen-plus", "qwen-max", "qwen-flash"],
+    signupUrl: "https://dashscope.aliyun.com",
   },
   kimi: {
     label: "Kimi（月之暗面）",
     baseUrl: "https://api.moonshot.cn/v1",
     models: ["moonshot-v1-32k", "kimi-k2-0905-preview"],
+    signupUrl: "https://platform.moonshot.cn",
   },
   siliconflow: {
     label: "硅基流动",
     baseUrl: "https://api.siliconflow.cn/v1",
     models: ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-72B-Instruct"],
+    signupUrl: "https://cloud.siliconflow.cn",
   },
   openrouter: {
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
     models: ["openrouter/auto"],
+    signupUrl: "https://openrouter.ai",
   },
   openai: {
     label: "OpenAI",
     baseUrl: "https://api.openai.com/v1",
     models: ["gpt-4o-mini", "gpt-4o"],
+    signupUrl: "https://platform.openai.com",
   },
   ollama: {
     label: "本地 Ollama",
     baseUrl: "http://127.0.0.1:11434/v1",
     models: ["qwen3:8b", "llama3.1"],
+    signupUrl: "https://ollama.com",
   },
   compatible: {
     label: "自定义（OpenAI 兼容）",
     baseUrl: "",
     models: [],
+    signupUrl: "",
   },
 };
 
@@ -221,7 +232,13 @@ export function LlmConnectionSettings() {
       <p>每个浏览器独立配置。密钥保存后不会回显，也不会写入分析任务、报告或关系图；未配置时，系统不会改用服务器管理员的 AI 密钥。</p>
     </div>
     <div className="llm-connection__form">
-      <label><span>接口类型</span><select aria-label="AI 接口类型" value={provider} onChange={(event) => changeProvider(event.target.value as LlmProvider)} disabled={loading || saving}>{(Object.keys(PROVIDER_PRESETS) as LlmProvider[]).map((key) => <option key={key} value={key}>{PROVIDER_PRESETS[key].label}</option>)}</select></label>
+      <label><span>接口类型</span><select aria-label="AI 接口类型" value={provider} onChange={(event) => changeProvider(event.target.value as LlmProvider)} disabled={loading || saving}>{(Object.keys(PROVIDER_PRESETS) as LlmProvider[]).map((key) => <option key={key} value={key}>{PROVIDER_PRESETS[key].label}</option>)}</select>
+        {PROVIDER_PRESETS[provider].signupUrl && (
+          <small className="llm-provider-hint">
+            还没有 Key？<a href={PROVIDER_PRESETS[provider].signupUrl} target="_blank" rel="noreferrer noopener">前往 {PROVIDER_PRESETS[provider].label} 官网</a> 注册并在控制台创建即可。各家是否提供免费额度、额度多少，以官网公示为准。
+          </small>
+        )}
+      </label>
       <label className="llm-field--wide"><span>API Key</span><div className="secret-input"><input aria-label="AI API Key" type={showKey ? "text" : "password"} value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" placeholder={summary.has_key ? "已保存；留空则继续使用原密钥" : "粘贴你的 API Key"} /><button type="button" onClick={() => setShowKey((current) => !current)} aria-label={showKey ? "隐藏 API Key" : "显示 API Key"}>{showKey ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
       <label className="llm-field--wide"><span>API 地址</span><input aria-label="AI API 地址" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" /></label>
       <label><span>模型名称</span><input aria-label="AI 模型名称" value={model} onChange={(event) => setModel(event.target.value)} placeholder="模型 ID" list="llm-model-options" /></label>

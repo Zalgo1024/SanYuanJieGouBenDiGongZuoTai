@@ -802,11 +802,23 @@ html[data-theme="dark"] .editor-source textarea { background: oklch(.185 .014 25
 .llm-connection__form .temperature-field { align-content: start; }
 .temperature-field__title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .temperature-field__title > strong { color: var(--accent); font-size: 12px; font-weight: 750; }
-.llm-connection__form .temperature-field > small {
+.llm-connection__form .temperature-field > small,
+.llm-connection__form .llm-provider-hint {
   color: var(--ink-muted);
   font-size: 12px;
   font-weight: 500;
   line-height: 1.65;
+}
+
+.llm-provider-hint {
+  display: block;
+  margin-top: 8px;
+}
+
+.llm-provider-hint a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 @media (max-width: 860px) {

@@ -1,0 +1,43 @@
+# 构建上下文排除（本地开发/运行时产物绝不进镜像）
+.git
+.gitignore
+*.md
+!analysis_prompt.md
+!theory_config.json
+!.dockerignore
+
+# 本地数据与密钥
+backend/.env
+backend/data/
+backend/generated/
+backend/.venv/
+backend/.venv-broken/
+backend/tests/
+backend/pytest.ini
+
+# 前端（保留 src/ public/ 等构建必需源码，只排除依赖与产物）
+frontend/node_modules/
+frontend/.next/
+frontend/.next-dev/
+frontend/.env*
+
+# 报告产物 / 临时
+reports/
+outputs/
+docs/
+cases/
+tests/
+_archived/
+.runtime/
+__pycache__/
+*.pyc
+.pytest_cache/
+体检.bat
+启动工作台.bat
+start.bat
+stop.bat
+status.bat
+DEPLOY_PLAN.md
+UPGRADE_PLAN.md
+PRODUCT.md
+AGENTS.md

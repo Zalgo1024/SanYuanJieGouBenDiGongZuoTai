@@ -1,4 +1,7 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
+// API 基址：默认直连本地后端（127.0.0.1:8000，本地工作台）。
+// 同源部署（NEXT_PUBLIC_API_URL 设为空字符串）时走相对路径，
+// 由前置反代（Caddy/nginx）把 /api /ws 转发到后端，浏览器只访问前端一个源。
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 
 export class ApiError extends Error {
   code: string;
@@ -53,5 +56,11 @@ export function apiBaseUrl() {
   return API_BASE;
 }
 
-// WebSocket 基址：与 API_BASE 同主机，仅协议不同（http→ws）。
-export const WS_BASE = API_BASE.replace(/^http/, "ws");
+// WebSocket 地址：独立部署时与 API_BASE 同主机、仅协议不同（http→ws）；
+// 同源部署（API_BASE 为空）时基于当前页面 host 构造 ws(s):// URL。
+export function wsUrl(path: string): string {
+  if (API_BASE) return `${API_BASE.replace(/^http/, "ws")}${path}`;
+  const proto =
+    typeof location !== "undefined" && location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}${path}`;
+}

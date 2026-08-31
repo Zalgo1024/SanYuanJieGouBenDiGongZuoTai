@@ -49,11 +49,22 @@ class Settings:
         self.host: str = os.environ.get("HOST", "127.0.0.1")
         self.port: int = int(os.environ.get("PORT", "8000"))
 
-        # 默认项目归属人（本地单用户模式）。多用户时归属人应从会话/请求上下文获取；
-        # 此处作为可配置默认值，避免「李政恒」硬编码散落多处（见审查红线 P1·魔法值）。
-        # 可用 DEFAULT_OWNER_NAME / DEFAULT_OWNER_ID 覆盖。
-        self.default_owner_name: str = os.environ.get("DEFAULT_OWNER_NAME", "李政恒")
-        self.default_owner_id: str = os.environ.get("DEFAULT_OWNER_ID", "li")
+        # —— 公共部署模式（对外公测/多用户）：开启后 resolve_config 不再回退
+        # 服务器 .env / 全局 store 的密钥，所有访客必须自带 API Key（BYOK），
+        # 防止服务器管理员遗留的密钥被公共流量白嫖。
+        # 同时决定默认归属人取值，故在此提前计算（原位置在本段之后）。
+        self.public_mode: bool = (
+            os.environ.get("PUBLIC_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+
+        # 默认项目归属人。默认取工作台品牌名，不在界面暴露作者个人姓名；
+        # 需要固定归属人时显式配置 DEFAULT_OWNER_NAME / DEFAULT_OWNER_ID 即可（优先级最高）。
+        self.default_owner_name: str = os.environ.get(
+            "DEFAULT_OWNER_NAME", "三元结构分析工作台"
+        )
+        self.default_owner_id: str = os.environ.get(
+            "DEFAULT_OWNER_ID", "workbench"
+        )
 
         # —— 全网搜索（T1：检索源自动选择 BING_KEY → BRAVE_KEY → DDG 零 Key）——
         # 兼容旧字段（SEARCH_PROVIDER / SEARCH_API_KEY 仍在，供旧调用方使用）；
@@ -68,13 +79,6 @@ class Settings:
         self.brave_search_key: str = os.environ.get("BRAVE_SEARCH_KEY", "").strip()
         # 检索策略：auto(默认，BING→BRAVE→DDG 自动降级) | bing | brave | duckduckgo
         self.search_strategy: str = os.environ.get("SEARCH_STRATEGY", "auto").lower()
-
-        # —— 公共部署模式（对外公测/多用户）：开启后 resolve_config 不再回退
-        # 服务器 .env / 全局 store 的密钥，所有访客必须自带 API Key（BYOK），
-        # 防止服务器管理员遗留的密钥被公共流量白嫖。
-        self.public_mode: bool = (
-            os.environ.get("PUBLIC_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        )
 
     @property
     def search_configured(self) -> bool:
