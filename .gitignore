@@ -38,3 +38,8 @@ backend/venv/
 backend/runtime/
 backend/generated/
 backend/data/
+
+# ----- 内部计划 / 临时文档（仅本地留档，不公开） -----
+DEPLOY_PLAN.md
+GO_TO_MARKET_PLAN.md
+UPGRADE_PLAN.md
