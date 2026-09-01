@@ -43,3 +43,6 @@ backend/data/
 DEPLOY_PLAN.md
 GO_TO_MARKET_PLAN.md
 UPGRADE_PLAN.md
+
+# ----- 引擎调试预览页（本地调试产物，不入库） -----
+/outputs/
